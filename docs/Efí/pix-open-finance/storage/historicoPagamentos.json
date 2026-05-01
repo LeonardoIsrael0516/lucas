@@ -1,0 +1,42 @@
+[
+    {
+        "identificadorPagamento": "urn:efi:3cc16cce-8956-46a7-999a-089f88db8872",
+        "identificadorProprio": "Pagamento-immediate-payment-202501051434188d7418a1705a7e92aa985cf4",
+        "tipo": "immediate-payment",
+        "status": "pendente",
+        "valor": "0.01",
+        "dataCriacao": "2025-01-05 14:34:20",
+        "url": "https://auth.opf.efipay.com.br/oauth/authorize?client_id=95dfe9bd-2317-4426-ac79-348d4ca36788&request_uri=urn:ietf:params:oauth:request_uri:r0EWerO7cnBbUQ6XIhrfybakBlDzxK3Bnqi6tZmq0"
+    },
+    {
+        "identificadorPagamento": "urn:efi:873bb1d8-2959-4e22-a750-09f8eb2157da",
+        "identificadorProprio": "Pagamento-scheduled-payment-202501051434465890ce0e63cda0b5ee4d8823",
+        "tipo": "scheduled-payment",
+        "status": "pendente",
+        "valor": "0.01",
+        "dataCriacao": "2025-01-05 14:34:47",
+        "url": "https://auth.opf.efipay.com.br/oauth/authorize?client_id=95dfe9bd-2317-4426-ac79-348d4ca36788&request_uri=urn:ietf:params:oauth:request_uri:w6Zg48ISvgLvBq2oSH9p5t6LefCSa14jDS30C9XuRg",
+        "dataAgendamento": "2025-01-06"
+    },
+    {
+        "identificadorPagamento": "urn:efi:08a4ea2a-1333-4d6e-b3ea-41f28ab07812",
+        "identificadorProprio": "Pagamento-immediate-payment-20250105143506387353a7ece5def7229c862a",
+        "tipo": "immediate-payment",
+        "status": "pendente",
+        "valor": "0.01",
+        "dataCriacao": "2025-01-05 14:35:07",
+        "url": "https://auth.opf.efipay.com.br/oauth/authorize?client_id=95dfe9bd-2317-4426-ac79-348d4ca36788&request_uri=urn:ietf:params:oauth:request_uri:IZOsqlVnFMs4u9eaiw7sxQmyZ6GUtvtBhe2NMvviKk"
+    },
+    {
+        "identificadorPagamento": "urn:efi:3cdb6f7d-ce8b-4676-9b30-d4e58078c10e",
+        "identificadorProprio": "Pagamento-recurrent-payment-202501051435284011ab868459c6f6953722af",
+        "tipo": "recurrent-payment",
+        "status": "pendente",
+        "valor": "0.01",
+        "dataCriacao": "2025-01-05 14:35:29",
+        "url": "https://auth.opf.efipay.com.br/oauth/authorize?client_id=95dfe9bd-2317-4426-ac79-348d4ca36788&request_uri=urn:ietf:params:oauth:request_uri:VSyz8hZL9yQcaTFTw10e46dxUKpco4tMeus8zrigU",
+        "tipoRecorrencia": "diaria",
+        "dataInicio": "2025-01-06",
+        "quantidade": 2
+    }
+]

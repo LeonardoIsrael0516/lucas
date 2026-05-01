@@ -1,0 +1,16 @@
+# Terminação TLS na borda (Let's Encrypt automático) quando GETFY_CADDY_HOST é um FQDN.
+# Cloudflare: use SSL/TLS "Full" ou "Full (strict)"; abra 80 e 443 no firewall da VPS.
+# Se HTTP-01 falhar atrás do proxy, use desafio DNS-01 (documentação em docs/INSTALL_VPS.md).
+{
+	http_port 80
+	https_port 443
+	email {$GETFY_ACME_EMAIL}
+}
+
+{$GETFY_CADDY_HOST} {
+	request_body {
+		max_size 64MB
+	}
+	reverse_proxy app:80
+	encode zstd gzip
+}
