@@ -32,23 +32,37 @@ if [ "$(id -u)" -ne 0 ]; then
   fi
 fi
 
-if [ -t 0 ]; then
-  echo ""
-  echo "Instalação Getfy — HTTPS automático (Let's Encrypt na origem) é opcional."
-  echo "Para só HTTP (ex.: acesso por IP), deixe o domínio em branco."
-  if [ -z "${GETFY_DOMAIN:-}" ]; then
-    read -r -p "Domínio público (ex.: loja.seudominio.com) [Enter = sem HTTPS automático]: " _getfy_domain_input
-    GETFY_DOMAIN="$(echo "$_getfy_domain_input" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
-  fi
-  if [ -n "${GETFY_DOMAIN:-}" ] && [ -z "${GETFY_ACME_EMAIL:-}" ]; then
-    while true; do
-      read -r -p "E-mail para Let's Encrypt (ACME / contato do certificado): " _getfy_acme_input
-      GETFY_ACME_EMAIL="$(echo "$_getfy_acme_input" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
-      if [ -n "$GETFY_ACME_EMAIL" ]; then
-        break
-      fi
-      echo "Informe um e-mail para continuar com HTTPS automático (ou Ctrl+C para cancelar)." >&2
-    done
+# Perguntas no teclado: com "curl ... | bash" o stdin é o pipe (não é TTY) e [ -t 0 ] falha —
+# as perguntas eram ignoradas mesmo quando você digitava noutro passo. Ler de /dev/tty corrige.
+GETFY_INSTALL_TTY=""
+if [ -r /dev/tty ] && [ -w /dev/tty ]; then
+  GETFY_INSTALL_TTY=/dev/tty
+elif [ -t 0 ]; then
+  GETFY_INSTALL_TTY=/dev/stdin
+fi
+
+if [ -z "${GETFY_DOMAIN:-}" ] || [ -z "${GETFY_ACME_EMAIL:-}" ]; then
+  if [ -n "$GETFY_INSTALL_TTY" ]; then
+    echo ""
+    echo "Instalação Getfy — HTTPS automático (Let's Encrypt na origem) é opcional."
+    echo "Para só HTTP (ex.: acesso por IP), deixe o domínio em branco."
+    if [ -z "${GETFY_DOMAIN:-}" ]; then
+      read -r -p "Domínio público (ex.: loja.seudominio.com) [Enter = sem HTTPS automático]: " _getfy_domain_input <"$GETFY_INSTALL_TTY"
+      GETFY_DOMAIN="$(echo "$_getfy_domain_input" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+    fi
+    if [ -n "${GETFY_DOMAIN:-}" ] && [ -z "${GETFY_ACME_EMAIL:-}" ]; then
+      while true; do
+        read -r -p "E-mail para Let's Encrypt (ACME / contato do certificado): " _getfy_acme_input <"$GETFY_INSTALL_TTY"
+        GETFY_ACME_EMAIL="$(echo "$_getfy_acme_input" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+        if [ -n "$GETFY_ACME_EMAIL" ]; then
+          break
+        fi
+        echo "Informe um e-mail para continuar com HTTPS automático (ou Ctrl+C para cancelar)." >&2
+      done
+    fi
+  else
+    echo "Aviso: sem terminal (ex.: CI/cron) e sem GETFY_DOMAIN/GETFY_ACME_EMAIL no ambiente — a instalar só HTTP." >&2
+    echo "      Para HTTPS na origem defina antes: GETFY_DOMAIN=... GETFY_ACME_EMAIL=..." >&2
   fi
 fi
 
