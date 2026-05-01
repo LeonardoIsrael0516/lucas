@@ -194,6 +194,7 @@ fi
 cd "$INSTALL_DIR"
 
 $SUDO chmod +x docker/up.sh >/dev/null 2>&1 || true
+$SUDO chmod +x docker/check-caddy-tls.sh >/dev/null 2>&1 || true
 
 if [ "$TLS_ACTIVE" = true ]; then
   if ss -ltn 2>/dev/null | awk '{print $4}' | grep -qE '(^|:)80$'; then
@@ -205,6 +206,9 @@ if [ "$TLS_ACTIVE" = true ]; then
   $SUDO env GETFY_DOMAIN="$GETFY_DOMAIN" GETFY_ACME_EMAIL="$GETFY_ACME_EMAIL" GETFY_TLS=1 \
     GETFY_HTTP_PORT=80 GETFY_HTTPS_PORT=443 \
     sh docker/up.sh
+  echo ""
+  echo "--- Verificação Caddy / SSL (erros do Let's Encrypt aparecem abaixo) ---"
+  $SUDO sh docker/check-caddy-tls.sh || true
 else
   if ss -ltn 2>/dev/null | awk '{print $4}' | grep -qE "(^|:)${HTTP_PORT}$"; then
     echo "Aviso: porta $HTTP_PORT parece estar em uso. Se o compose falhar, mude GETFY_HTTP_PORT." >&2

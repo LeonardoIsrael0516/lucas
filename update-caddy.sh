@@ -71,5 +71,12 @@ cd "$INSTALL_DIR"
 
 $SUDO env GETFY_COMPOSE_FILES="docker-compose.caddy.yml" sh docker/up.sh
 
+$SUDO chmod +x docker/check-caddy-tls.sh 2>/dev/null || true
+if [ -f docker/check-caddy-tls.sh ]; then
+  echo ""
+  echo "--- Verificação Caddy / SSL ---"
+  $SUDO sh docker/check-caddy-tls.sh || true
+fi
+
 echo ""
 echo "Atualização concluída e stack (Caddy) reiniciado."

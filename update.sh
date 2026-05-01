@@ -70,6 +70,20 @@ fi
 cd "$INSTALL_DIR"
 $SUDO sh docker/up.sh
 
+$SUDO chmod +x docker/check-caddy-tls.sh 2>/dev/null || true
+RUN_GETFY_TLS_CHECK=0
+if [ -f ".docker/compose-profile" ] && [ "$(tr -d '\r\n' < .docker/compose-profile)" = "caddy" ]; then
+  RUN_GETFY_TLS_CHECK=1
+elif grep -q '^GETFY_COMPOSE_PROFILE=caddy' .docker/stack.env 2>/dev/null; then
+  RUN_GETFY_TLS_CHECK=1
+fi
+
+if [ "$RUN_GETFY_TLS_CHECK" = "1" ] && [ -f docker/check-caddy-tls.sh ]; then
+  echo ""
+  echo "--- Verificação Caddy / SSL (útil se Cloudflare Full ou certificado falhar) ---"
+  $SUDO sh docker/check-caddy-tls.sh || true
+fi
+
 echo ""
 echo "Atualização concluída e stack reiniciado."
 echo "Dica: para conferir limites de upload do PHP no container, na pasta da instalação (ex.: cd \"$INSTALL_DIR\"): sh docker/check-php-upload-limits.sh"
