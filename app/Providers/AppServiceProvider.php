@@ -1,0 +1,285 @@
+<?php
+
+namespace App\Providers;
+
+use App\Events\BoletoGenerated;
+use App\Events\OrderCompleted;
+use App\Events\PixGenerated;
+use App\Events\SupportTicketMessageCreated;
+use App\Listeners\SendAccessEmailOnOrderCompleted;
+use App\Listeners\SendPanelPushOnBoletoGenerated;
+use App\Listeners\SendPanelPushOnOrderCompleted;
+use App\Listeners\SendPanelPushOnPixGenerated;
+use App\Listeners\SendSupportTicketEmailOnMessageCreated;
+use App\Listeners\CademiEventSubscriber;
+use App\Listeners\SpedyEventSubscriber;
+use App\Listeners\UtmifyEventSubscriber;
+use App\Listeners\SendApiApplicationWebhookListener;
+use App\Listeners\WebhookEventSubscriber;
+use App\Support\DockerSetupState;
+use Illuminate\Auth\Notifications\ResetPassword;
+use Illuminate\Auth\Notifications\VerifyEmail;
+use Illuminate\Cache\RateLimiting\Limit;
+use Illuminate\Http\Request;
+use Illuminate\Notifications\Messages\MailMessage;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Event;
+use Illuminate\Support\Facades\RateLimiter;
+use Illuminate\Support\Facades\Queue;
+use Illuminate\Support\Facades\Redis;
+use Illuminate\Support\Facades\URL;
+use Illuminate\Support\ServiceProvider;
+use App\Plugins\PluginRegistry;
+
+class AppServiceProvider extends ServiceProvider
+{
+    /**
+     * Register any application services.
+     */
+    public function register(): void
+    {
+        //
+    }
+
+    /**
+     * Bootstrap any application services.
+     */
+    public function boot(): void
+    {
+        // Gera links absolutos (Vite, asset, route) em HTTPS quando APP_URL jÃ¡ Ã© https â€” evita
+        // mistura http/https atrÃ¡s de proxy que nÃ£o envia X-Forwarded-Proto (ex.: domÃ­nio custom na cloud).
+        $appUrl = (string) config('app.url', '');
+        if ($appUrl !== '' && str_starts_with($appUrl, 'https://')) {
+            URL::forceScheme('https');
+        }
+
+        $this->ensureRuntimeDirectories();
+        $this->fallbackRedisToDatabase();
+        $this->fallbackInvalidQueueConnectionToSync();
+        $this->bootCloudFolder();
+        if (DockerSetupState::isDocker() && class_exists(\Illuminate\Support\Facades\Vite::class)) {
+            \Illuminate\Support\Facades\Vite::useHotFile(storage_path('framework/vite.hot'));
+        }
+
+        RateLimiter::for('api', function (Request $request) {
+            return Limit::perMinute(60)->by($request->user()?->id ?: $request->ip());
+        });
+
+        // Limite especÃ­fico para geraÃ§Ã£o de PIX no checkout (por IP).
+        // SÃ³ conta quando payment_method === 'pix'. Para outros mÃ©todos nÃ£o impÃµe limite extra.
+        RateLimiter::for('checkout-pix', function (Request $request) {
+            $method = strtolower((string) $request->input('payment_method', ''));
+            if ($method !== 'pix') {
+                return Limit::none();
+            }
+            return Limit::perMinutes(5, 3)->by($request->ip());
+        });
+
+        Queue::after(function (): void {
+            Cache::put('queue_heartbeat', now()->toIso8601String(), now()->addMinutes(5));
+        });
+
+        Event::listen(OrderCompleted::class, SendAccessEmailOnOrderCompleted::class);
+        Event::listen(OrderCompleted::class, SendPanelPushOnOrderCompleted::class);
+        Event::listen(PixGenerated::class, SendPanelPushOnPixGenerated::class);
+        Event::listen(BoletoGenerated::class, SendPanelPushOnBoletoGenerated::class);
+        Event::listen(SupportTicketMessageCreated::class, SendSupportTicketEmailOnMessageCreated::class);
+        Event::subscribe(WebhookEventSubscriber::class);
+        Event::subscribe(SendApiApplicationWebhookListener::class);
+        Event::subscribe(UtmifyEventSubscriber::class);
+        Event::subscribe(SpedyEventSubscriber::class);
+        Event::subscribe(CademiEventSubscriber::class);
+
+        VerifyEmail::toMailUsing(function (object $notifiable, string $verificationUrl) {
+            [$appName, $logoUrl] = $this->resolveWhiteLabelEmailBranding($notifiable);
+
+            return (new MailMessage)
+                ->from((string) config('mail.from.address'), $appName)
+                ->markdown('notifications::email', ['logoUrl' => $logoUrl, 'appName' => $appName])
+                ->subject('Confirme seu e-mail')
+                ->greeting('OlÃ¡!')
+                ->line('Clique no botÃ£o abaixo para confirmar seu endereÃ§o de e-mail.')
+                ->action('Confirmar e-mail', $verificationUrl)
+                ->line('Se vocÃª nÃ£o criou uma conta, nenhuma aÃ§Ã£o Ã© necessÃ¡ria.');
+        });
+
+        ResetPassword::toMailUsing(function (object $notifiable, string $token) {
+            $params = [
+                'token' => $token,
+                'email' => $notifiable->getEmailForPasswordReset(),
+            ];
+            $redirect = app()->bound('password_reset_redirect') ? app('password_reset_redirect') : null;
+            if ($redirect !== null) {
+                $params['redirect'] = $redirect;
+            }
+            $url = url(route('password.reset', $params, false));
+            $expire = config('auth.passwords.'.config('auth.defaults.passwords').'.expire');
+            [$appName, $logoUrl] = $this->resolveWhiteLabelEmailBranding($notifiable);
+
+            return (new MailMessage)
+                ->from((string) config('mail.from.address'), $appName)
+                ->markdown('notifications::email', ['logoUrl' => $logoUrl, 'appName' => $appName])
+                ->subject('RedefiniÃ§Ã£o de senha')
+                ->greeting('OlÃ¡!')
+                ->line('VocÃª estÃ¡ recebendo este e-mail porque recebemos uma solicitaÃ§Ã£o de redefiniÃ§Ã£o de senha da sua conta.')
+                ->action('Redefinir senha', $url)
+                ->line('Este link expira em '.$expire.' minutos.')
+                ->line('Se vocÃª nÃ£o solicitou a redefiniÃ§Ã£o de senha, nenhuma aÃ§Ã£o Ã© necessÃ¡ria.');
+        });
+    }
+
+    /**
+     * @return array{0: string, 1: string|null} [appName, logoUrl]
+     */
+    private function resolveWhiteLabelEmailBranding(object $notifiable): array
+    {
+        $defaultName = (string) config('app.name', 'Getfy');
+        $defaultLogo = 'https://cdn.getfy.cloud/logo-white.png';
+
+        try {
+            $enabled = collect(PluginRegistry::enabled())->contains(fn ($p) => ($p['slug'] ?? null) === 'white-label');
+            if (! $enabled) {
+                return [$defaultName, $defaultLogo];
+            }
+        } catch (\Throwable) {
+            return [$defaultName, $defaultLogo];
+        }
+
+        if (! class_exists(\Plugins\WhiteLabel\WhiteLabelSetting::class) || ! class_exists(\Plugins\WhiteLabel\ApplyWhiteLabelConfig::class)) {
+            return [$defaultName, $defaultLogo];
+        }
+
+        try {
+            if (! \Illuminate\Support\Facades\Schema::hasTable('white_label_settings')) {
+                return [$defaultName, $defaultLogo];
+            }
+        } catch (\Throwable) {
+            return [$defaultName, $defaultLogo];
+        }
+
+        $tenantId = null;
+        try {
+            $tenantId = $notifiable->tenant_id ?? null;
+        } catch (\Throwable) {
+            $tenantId = null;
+        }
+
+        try {
+            $global = \Plugins\WhiteLabel\WhiteLabelSetting::query()->whereNull('tenant_id')->first();
+            $tenant = $tenantId !== null
+                ? \Plugins\WhiteLabel\WhiteLabelSetting::query()->where('tenant_id', $tenantId)->first()
+                : null;
+
+            $globalData = is_array($global?->data) ? $global->data : [];
+            $tenantData = is_array($tenant?->data) ? $tenant->data : [];
+            $branding = \Plugins\WhiteLabel\ApplyWhiteLabelConfig::mergeLayers($globalData, $tenantData);
+
+            $appName = trim((string) ($branding['app_name'] ?? ''));
+            if ($appName === '') {
+                $appName = $defaultName;
+            }
+
+            $logoUrl = null;
+            $logoRaw = trim((string) ($branding['app_logo'] ?? ''));
+            if ($logoRaw !== '' && filter_var($logoRaw, FILTER_VALIDATE_URL)) {
+                $logoUrl = $logoRaw;
+            } else {
+                $logoUrl = $defaultLogo;
+            }
+
+            return [$appName, $logoUrl];
+        } catch (\Throwable) {
+            return [$defaultName, $defaultLogo];
+        }
+    }
+
+    private function bootCloudFolder(): void
+    {
+        if (! is_dir(base_path('cloud'))) {
+            return;
+        }
+
+        $bootstrap = base_path('cloud/bootstrap.php');
+        if (! is_file($bootstrap)) {
+            return;
+        }
+
+        try {
+            $register = require $bootstrap;
+            if (is_callable($register)) {
+                $register($this->app);
+            }
+        } catch (\Throwable $e) {
+            report($e);
+        }
+    }
+
+    private function ensureRuntimeDirectories(): void
+    {
+        static $done = false;
+        if ($done) {
+            return;
+        }
+        $done = true;
+
+        $paths = [
+            storage_path('framework/cache/data'),
+            storage_path('framework/sessions'),
+            storage_path('framework/views'),
+            storage_path('logs'),
+            base_path('bootstrap/cache'),
+        ];
+
+        foreach ($paths as $path) {
+            if (! is_dir($path)) {
+                @mkdir($path, 0755, true);
+            }
+        }
+    }
+
+    /**
+     * Se Redis estiver configurado mas indisponÃ­vel, usa database para cache, sessÃ£o e fila.
+     */
+    private function fallbackRedisToDatabase(): void
+    {
+        $usesRedis = config('cache.default') === 'redis'
+            || config('session.driver') === 'redis'
+            || config('queue.default') === 'redis';
+
+        if (! $usesRedis) {
+            return;
+        }
+
+        try {
+            Redis::connection()->ping();
+        } catch (\Throwable $e) {
+            if (config('cache.default') === 'redis') {
+                config(['cache.default' => 'database']);
+            }
+            if (config('session.driver') === 'redis') {
+                config(['session.driver' => 'database']);
+            }
+            if (config('queue.default') === 'redis') {
+                config(['queue.default' => 'database']);
+            }
+        }
+    }
+
+    private function fallbackInvalidQueueConnectionToSync(): void
+    {
+        $default = (string) config('queue.default', 'sync');
+        $connections = config('queue.connections', []);
+        if (! is_array($connections) || $connections === []) {
+            config(['queue.default' => 'sync']);
+            return;
+        }
+        if (! array_key_exists($default, $connections)) {
+            config(['queue.default' => 'sync']);
+        }
+    }
+}
+
+
+
+
+

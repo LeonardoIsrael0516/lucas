@@ -1,0 +1,15 @@
+{
+    "slug": "lucas",
+    "name": "Lucas",
+    "version": "1.0.0",
+    "description": "Dashboard do aluno após login: cursos, continuar de onde parou e catálogo.",
+    "author": "Getfy",
+    "type": "integration",
+    "category": "member_area",
+    "banner": null,
+    "hidden": true,
+    "menu": [],
+    "routes": false,
+    "migrations": null,
+    "events": []
+}
