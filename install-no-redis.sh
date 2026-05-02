@@ -112,7 +112,9 @@ fi
 
 if [ -d "$INSTALL_DIR/.git" ]; then
   GIT_BASE=(git -c safe.directory="$INSTALL_DIR" -C "$INSTALL_DIR")
-  $SUDO "${GIT_BASE[@]}" remote set-url origin "$REPO_URL" >/dev/null 2>&1 || true
+  if [ -n "${GETFY_REPO_URL:-}" ]; then
+    $SUDO "${GIT_BASE[@]}" remote set-url origin "$GETFY_REPO_URL" >/dev/null 2>&1 || true
+  fi
   HAS_LOCAL_CHANGES=0
   STATUS_OUT="$($SUDO "${GIT_BASE[@]}" status --porcelain 2>/dev/null || true)"
   if [ -n "$STATUS_OUT" ]; then
@@ -142,7 +144,8 @@ fi
 
 cd "$INSTALL_DIR"
 
-$SUDO chmod +x docker/up.sh >/dev/null 2>&1 || true
+DOCKER_UP_SH="$INSTALL_DIR/docker/up.sh"
+$SUDO chmod +x "$DOCKER_UP_SH" >/dev/null 2>&1 || true
 
 export GETFY_QUEUE_CONNECTION="${GETFY_QUEUE_CONNECTION:-database}"
 export GETFY_CACHE_STORE="${GETFY_CACHE_STORE:-file}"
@@ -153,7 +156,7 @@ if ss -ltn 2>/dev/null | awk '{print $4}' | grep -qE "(^|:)$HTTP_PORT$"; then
   echo "Aviso: porta $HTTP_PORT parece estar em uso. Se o compose falhar, mude GETFY_HTTP_PORT." >&2
 fi
 
-$SUDO sh docker/up.sh
+$SUDO sh "$DOCKER_UP_SH"
 
 IP="$(curl -fsSL https://api.ipify.org 2>/dev/null || true)"
 if [ -z "$IP" ]; then

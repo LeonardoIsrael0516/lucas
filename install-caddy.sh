@@ -112,7 +112,9 @@ if [ -e "$INSTALL_DIR" ] && [ ! -d "$INSTALL_DIR" ]; then
 fi
 
 if [ -d "$INSTALL_DIR/.git" ]; then
-  $SUDO git -C "$INSTALL_DIR" remote set-url origin "$REPO_URL" >/dev/null 2>&1 || true
+  if [ -n "${GETFY_REPO_URL:-}" ]; then
+    $SUDO git -C "$INSTALL_DIR" remote set-url origin "$GETFY_REPO_URL" >/dev/null 2>&1 || true
+  fi
   $SUDO git -C "$INSTALL_DIR" fetch --all --prune
   $SUDO git -C "$INSTALL_DIR" checkout -B "$BRANCH" "origin/$BRANCH"
   $SUDO git -C "$INSTALL_DIR" reset --hard "origin/$BRANCH"

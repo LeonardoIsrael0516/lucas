@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO_URL="${GETFY_REPO_URL:-https://github.com/getfy-opensource/getfy.git}"
 BRANCH="${GETFY_BRANCH:-main}"
 INSTALL_DIR="${GETFY_DIR:-/opt/getfy}"
 
@@ -41,7 +40,9 @@ if [ ! -d "$INSTALL_DIR/.git" ]; then
 fi
 
 GIT_BASE=(git -c safe.directory="$INSTALL_DIR" -C "$INSTALL_DIR")
-$SUDO "${GIT_BASE[@]}" remote set-url origin "$REPO_URL" >/dev/null 2>&1 || true
+if [ -n "${GETFY_REPO_URL:-}" ]; then
+  $SUDO "${GIT_BASE[@]}" remote set-url origin "$GETFY_REPO_URL" >/dev/null 2>&1 || true
+fi
 
 HAS_LOCAL_CHANGES=0
 if [ -n "$($SUDO "${GIT_BASE[@]}" status --porcelain 2>/dev/null || true)" ]; then
