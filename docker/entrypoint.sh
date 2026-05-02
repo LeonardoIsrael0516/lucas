@@ -167,8 +167,22 @@ if [ "${GETFY_RUN_SETUP:-true}" = "true" ]; then
   if [ ! -f vendor/autoload.php ]; then
     composer install --no-dev --no-interaction --prefer-dist --optimize-autoloader --no-scripts
   fi
-  php artisan package:discover --ansi
-  php artisan migrate --force
+  echo "getfy-entrypoint: package:discover…"
+  if ! php artisan package:discover --ansi; then
+    echo "getfy-entrypoint: FALHA em php artisan package:discover. Rode na VPS para detalhes: docker logs getfy-app-1"
+    php artisan package:discover --ansi -vvv 2>/dev/null || true
+    exit 1
+  fi
+  if [ "${GETFY_SKIP_ENTRYPOINT_MIGRATE:-0}" = "1" ]; then
+    echo "getfy-entrypoint: Aviso GETFY_SKIP_ENTRYPOINT_MIGRATE=1 — migrate omitido neste arranque. Corrija a base e rode: php artisan migrate --force"
+  else
+    echo "getfy-entrypoint: migrate --force…"
+    if ! php artisan migrate --force; then
+      echo "getfy-entrypoint: FALHA em php artisan migrate --force."
+      echo "getfy-entrypoint: Tente verbose: docker compose -f docker-compose.caddy.yml --env-file .docker/stack.env run --rm --no-deps --entrypoint '' app php artisan migrate --force -vvv"
+      exit 1
+    fi
+  fi
   if ! php -r '
 require "vendor/autoload.php";
 $c = (string) @file_get_contents(".env");
