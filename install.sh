@@ -44,8 +44,12 @@ fi
 if [ -z "${GETFY_DOMAIN:-}" ] || [ -z "${GETFY_ACME_EMAIL:-}" ]; then
   if [ -n "$GETFY_INSTALL_TTY" ]; then
     echo ""
-    echo "Instalação Getfy — HTTPS automático (Let's Encrypt na origem) é opcional."
-    echo "Para só HTTP (ex.: acesso por IP), deixe o domínio em branco."
+    echo "Instalação Getfy — HTTPS na origem (Let's Encrypt via Caddy)"
+    echo "  • Recomendado se usar Cloudflare em modo SSL/TLS \"Full\" ou \"Full (strict)\"."
+    echo "    Nesses modos a Cloudflare exige HTTPS válido na VPS; o Let's Encrypt cumpre isso."
+    echo "  • O modo Cloudflare \"Flexible\" funciona sem certificado na origem (HTTP na VPS) —"
+    echo "    não use \"Flexible\" se quiser \"Full (strict)\" com esta stack."
+    echo "Para só HTTP (ex.: testes por IP), deixe o domínio em branco (Enter)."
     if [ -z "${GETFY_DOMAIN:-}" ]; then
       read -r -p "Domínio público (ex.: loja.seudominio.com) [Enter = sem HTTPS automático]: " _getfy_domain_input <"$GETFY_INSTALL_TTY"
       GETFY_DOMAIN="$(echo "$_getfy_domain_input" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
@@ -62,7 +66,8 @@ if [ -z "${GETFY_DOMAIN:-}" ] || [ -z "${GETFY_ACME_EMAIL:-}" ]; then
     fi
   else
     echo "Aviso: sem terminal (ex.: CI/cron) e sem GETFY_DOMAIN/GETFY_ACME_EMAIL no ambiente — a instalar só HTTP." >&2
-    echo "      Para HTTPS na origem defina antes: GETFY_DOMAIN=... GETFY_ACME_EMAIL=..." >&2
+    echo "      Para HTTPS na origem (Cloudflare Full strict), exporte antes de correr o instalador:" >&2
+    echo "      export GETFY_DOMAIN=loja.seudominio.com GETFY_ACME_EMAIL=voce@email.com" >&2
   fi
 fi
 
@@ -210,6 +215,9 @@ if [ "$TLS_ACTIVE" = true ]; then
   echo "--- Verificação Caddy / SSL (erros do Let's Encrypt aparecem abaixo) ---"
   $SUDO sh docker/check-caddy-tls.sh || true
 else
+  echo ""
+  echo "Nota: sem HTTPS automático na origem. Cloudflare \"Full\" / \"Full (strict)\" exige certificado"
+  echo "válido na VPS — instale de novo com GETFY_DOMAIN + GETFY_ACME_EMAIL ou veja docs/INSTALL_VPS.md."
   if ss -ltn 2>/dev/null | awk '{print $4}' | grep -qE "(^|:)${HTTP_PORT}$"; then
     echo "Aviso: porta $HTTP_PORT parece estar em uso. Se o compose falhar, mude GETFY_HTTP_PORT." >&2
   fi
@@ -228,7 +236,8 @@ echo ""
 echo "Getfy iniciado via Docker."
 if [ "$TLS_ACTIVE" = true ]; then
   echo "Abra: https://${GETFY_DOMAIN}/docker-setup"
-  echo "(SSL na origem via Caddy + Let's Encrypt; no Cloudflare use SSL/TLS \"Full\" ou \"Full strict\".)"
+  echo "SSL na origem: Caddy + Let's Encrypt. No Cloudflare use SSL/TLS \"Full (strict)\" (recomendado)."
+  echo "Se a página não abrir em HTTPS, veja os erros ACME acima ou: sudo sh docker/check-caddy-tls.sh"
 else
   echo "Abra: http://$IP:$HTTP_PORT/docker-setup"
 fi
