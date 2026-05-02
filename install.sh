@@ -198,8 +198,12 @@ fi
 
 cd "$INSTALL_DIR"
 
-$SUDO chmod +x docker/up.sh >/dev/null 2>&1 || true
-$SUDO chmod +x docker/check-caddy-tls.sh >/dev/null 2>&1 || true
+# Caminhos absolutos: `sudo sh docker/…` pode correr com cwd em /root (não é a pasta da app).
+DOCKER_UP_SH="$INSTALL_DIR/docker/up.sh"
+DOCKER_CHECK_TLS_SH="$INSTALL_DIR/docker/check-caddy-tls.sh"
+
+$SUDO chmod +x "$DOCKER_UP_SH" >/dev/null 2>&1 || true
+$SUDO chmod +x "$DOCKER_CHECK_TLS_SH" >/dev/null 2>&1 || true
 
 if [ "$TLS_ACTIVE" = true ]; then
   if ss -ltn 2>/dev/null | awk '{print $4}' | grep -qE '(^|:)80$'; then
@@ -210,10 +214,14 @@ if [ "$TLS_ACTIVE" = true ]; then
   fi
   $SUDO env GETFY_DOMAIN="$GETFY_DOMAIN" GETFY_ACME_EMAIL="$GETFY_ACME_EMAIL" GETFY_TLS=1 \
     GETFY_HTTP_PORT=80 GETFY_HTTPS_PORT=443 \
-    sh docker/up.sh
+    sh "$DOCKER_UP_SH"
   echo ""
   echo "--- Verificação Caddy / SSL (erros do Let's Encrypt aparecem abaixo) ---"
-  $SUDO sh docker/check-caddy-tls.sh || true
+  if [ -f "$DOCKER_CHECK_TLS_SH" ]; then
+    $SUDO sh "$DOCKER_CHECK_TLS_SH" || true
+  else
+    echo "Aviso: não encontrado $DOCKER_CHECK_TLS_SH (repositório incompleto ou GETFY_DIR errado?)." >&2
+  fi
 else
   echo ""
   echo "Nota: sem HTTPS automático na origem. Cloudflare \"Full\" / \"Full (strict)\" exige certificado"
@@ -221,7 +229,7 @@ else
   if ss -ltn 2>/dev/null | awk '{print $4}' | grep -qE "(^|:)${HTTP_PORT}$"; then
     echo "Aviso: porta $HTTP_PORT parece estar em uso. Se o compose falhar, mude GETFY_HTTP_PORT." >&2
   fi
-  $SUDO env GETFY_HTTP_PORT="${HTTP_PORT}" sh docker/up.sh
+  $SUDO env GETFY_HTTP_PORT="${HTTP_PORT}" sh "$DOCKER_UP_SH"
 fi
 
 IP="$(curl -fsSL https://api.ipify.org 2>/dev/null || true)"
@@ -237,7 +245,7 @@ echo "Getfy iniciado via Docker."
 if [ "$TLS_ACTIVE" = true ]; then
   echo "Abra: https://${GETFY_DOMAIN}/docker-setup"
   echo "SSL na origem: Caddy + Let's Encrypt. No Cloudflare use SSL/TLS \"Full (strict)\" (recomendado)."
-  echo "Se a página não abrir em HTTPS, veja os erros ACME acima ou: sudo sh docker/check-caddy-tls.sh"
+  echo "Se a página não abrir em HTTPS, veja os erros ACME acima ou: sudo sh \"$DOCKER_CHECK_TLS_SH\""
 else
   echo "Abra: http://$IP:$HTTP_PORT/docker-setup"
 fi

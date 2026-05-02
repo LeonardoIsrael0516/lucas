@@ -68,9 +68,11 @@ if [ "$HAS_LOCAL_CHANGES" -eq 1 ]; then
 fi
 
 cd "$INSTALL_DIR"
-$SUDO sh docker/up.sh
+DOCKER_UP_SH="$INSTALL_DIR/docker/up.sh"
+DOCKER_CHECK_TLS_SH="$INSTALL_DIR/docker/check-caddy-tls.sh"
+$SUDO sh "$DOCKER_UP_SH"
 
-$SUDO chmod +x docker/check-caddy-tls.sh 2>/dev/null || true
+$SUDO chmod +x "$DOCKER_CHECK_TLS_SH" 2>/dev/null || true
 RUN_GETFY_TLS_CHECK=0
 if [ -f ".docker/compose-profile" ] && [ "$(tr -d '\r\n' < .docker/compose-profile)" = "caddy" ]; then
   RUN_GETFY_TLS_CHECK=1
@@ -78,10 +80,10 @@ elif grep -q '^GETFY_COMPOSE_PROFILE=caddy' .docker/stack.env 2>/dev/null; then
   RUN_GETFY_TLS_CHECK=1
 fi
 
-if [ "$RUN_GETFY_TLS_CHECK" = "1" ] && [ -f docker/check-caddy-tls.sh ]; then
+if [ "$RUN_GETFY_TLS_CHECK" = "1" ] && [ -f "$DOCKER_CHECK_TLS_SH" ]; then
   echo ""
   echo "--- Verificação Caddy / SSL (útil se Cloudflare Full ou certificado falhar) ---"
-  $SUDO sh docker/check-caddy-tls.sh || true
+  $SUDO sh "$DOCKER_CHECK_TLS_SH" || true
 fi
 
 echo ""

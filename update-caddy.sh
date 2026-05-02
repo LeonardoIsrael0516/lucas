@@ -69,13 +69,15 @@ fi
 
 cd "$INSTALL_DIR"
 
-$SUDO env GETFY_COMPOSE_FILES="docker-compose.caddy.yml" sh docker/up.sh
+DOCKER_UP_SH="$INSTALL_DIR/docker/up.sh"
+DOCKER_CHECK_TLS_SH="$INSTALL_DIR/docker/check-caddy-tls.sh"
+$SUDO env GETFY_COMPOSE_FILES="docker-compose.caddy.yml" sh "$DOCKER_UP_SH"
 
-$SUDO chmod +x docker/check-caddy-tls.sh 2>/dev/null || true
-if [ -f docker/check-caddy-tls.sh ]; then
+$SUDO chmod +x "$DOCKER_CHECK_TLS_SH" 2>/dev/null || true
+if [ -f "$DOCKER_CHECK_TLS_SH" ]; then
   echo ""
   echo "--- Verificação Caddy / SSL ---"
-  $SUDO sh docker/check-caddy-tls.sh || true
+  $SUDO sh "$DOCKER_CHECK_TLS_SH" || true
 fi
 
 echo ""

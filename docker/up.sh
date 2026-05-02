@@ -1,7 +1,18 @@
 #!/bin/sh
 set -e
 
-ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+_SCRIPT_DIR="$(dirname "$0")"
+case "$_SCRIPT_DIR" in
+  /*) ;;
+  *)
+    if [ ! -d "$_SCRIPT_DIR" ]; then
+      echo "getfy: docker/up.sh com cwd errado ou caminho relativo inválido (ex.: sudo desde /root)." >&2
+      echo "    Use caminho absoluto (ex.: sh /opt/getfy/docker/up.sh) ou: cd pasta-do-getfy && sh docker/up.sh" >&2
+      exit 1
+    fi
+  ;;
+esac
+ROOT_DIR="$(cd "$_SCRIPT_DIR/.." && pwd)"
 cd "$ROOT_DIR"
 
 mkdir -p .docker

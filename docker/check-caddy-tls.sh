@@ -1,10 +1,17 @@
 #!/bin/sh
 # Diagnóstico rápido: Caddy, portas 80/443 e logs Let's Encrypt.
-# Uso na pasta da instalação: sh docker/check-caddy-tls.sh
-# Ou: sudo sh /opt/getfy/docker/check-caddy-tls.sh
+# Dentro da pasta do clone: sh docker/check-caddy-tls.sh
+# Por caminho: sudo sh /opt/getfy/docker/check-caddy-tls.sh
+# Sem o ficheiro no disco (fork antigo): defina onde está o clone, ex.:
+#   curl -fsSL https://raw.githubusercontent.com/getfy-opensource/getfy/main/docker/check-caddy-tls.sh -o /tmp/check-caddy-tls.sh
+#   sudo GETFY_DIR=/opt/getfy sh /tmp/check-caddy-tls.sh
 
-ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-cd "$ROOT_DIR" || exit 1
+if [ -n "${GETFY_DIR:-}" ]; then
+  ROOT_DIR="$GETFY_DIR"
+else
+  ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+fi
+cd "$ROOT_DIR" || { echo "getfy: não foi possível aceder à pasta: $ROOT_DIR (defina GETFY_DIR?)." >&2; exit 1; }
 
 ENV_FILE=".docker/stack.env"
 if [ ! -f "$ENV_FILE" ]; then

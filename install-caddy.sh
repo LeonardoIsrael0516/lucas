@@ -123,7 +123,8 @@ fi
 
 cd "$INSTALL_DIR"
 
-$SUDO chmod +x docker/up.sh >/dev/null 2>&1 || true
+DOCKER_UP_SH="$INSTALL_DIR/docker/up.sh"
+$SUDO chmod +x "$DOCKER_UP_SH" >/dev/null 2>&1 || true
 
 if ss -ltn 2>/dev/null | awk '{print $4}' | grep -qE "(^|:)$HTTP_PORT$"; then
   echo "Aviso: porta $HTTP_PORT parece estar em uso. Se o compose falhar, mude GETFY_HTTP_PORT." >&2
@@ -132,7 +133,7 @@ if ss -ltn 2>/dev/null | awk '{print $4}' | grep -qE "(^|:)$HTTPS_PORT$"; then
   echo "Aviso: porta $HTTPS_PORT parece estar em uso. Se o compose falhar, mude GETFY_HTTPS_PORT." >&2
 fi
 
-$SUDO env GETFY_COMPOSE_FILES="docker-compose.caddy.yml" GETFY_HTTP_PORT="${HTTP_PORT}" GETFY_HTTPS_PORT="${HTTPS_PORT}" sh docker/up.sh
+$SUDO env GETFY_COMPOSE_FILES="docker-compose.caddy.yml" GETFY_HTTP_PORT="${HTTP_PORT}" GETFY_HTTPS_PORT="${HTTPS_PORT}" sh "$DOCKER_UP_SH"
 
 IP="$(curl -fsSL https://api.ipify.org 2>/dev/null || true)"
 if [ -z "$IP" ]; then
