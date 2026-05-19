@@ -245,7 +245,7 @@ const BASE_TABS = [
     { id: 'links', label: 'Links', icon: Link2 },
     { id: 'coproducao', label: 'Co-produção', icon: Handshake },
     { id: 'afiliados', label: 'Afiliados', icon: Users },
-    { id: 'member_builder', label: 'Member Builder', icon: LayoutGrid, linkOnly: true },
+    { id: 'member_builder', label: 'Conteúdo do curso', icon: LayoutGrid, linkOnly: true },
 ];
 
 const props = defineProps({
@@ -363,7 +363,9 @@ const form = useForm({
     base_interval: props.produto.base_interval ?? (props.produto.subscription_plans?.sort((a, b) => (a.position ?? 0) - (b.position ?? 0))[0]?.interval) ?? 'monthly',
     currency: props.produto.currency ?? 'BRL',
     is_active: props.produto.is_active,
+    course_access_days: props.produto.course_access_days ?? '',
     image: null,
+    member_area_cover: null,
     conversion_pixels: mergeConversionPixels(props.produto.conversion_pixels),
     deliverable_link: props.produto.checkout_config?.deliverable_link ?? '',
     payment_gateways: {
@@ -412,11 +414,24 @@ watch(maxAllowedInstallments, (maxAllowed) => {
     }
 }, { immediate: true });
 
+const COURSE_COVER_WIDTH = 1060;
+const COURSE_COVER_HEIGHT = 663;
+
+const isAreaMembrosProduct = computed(() => (form.type || props.produto.type) === 'area_membros');
+
 const currentImageUrl = computed(() => {
     if (form.image && typeof form.image === 'object' && form.image instanceof File) {
         return URL.createObjectURL(form.image);
     }
     return props.produto.image_url ?? null;
+});
+
+/** Capa única (checkout + hub /area-membros) para produtos tipo área de membros. */
+const currentCourseCoverUrl = computed(() => {
+    if (form.image && typeof form.image === 'object' && form.image instanceof File) {
+        return URL.createObjectURL(form.image);
+    }
+    return props.produto.member_area_cover_url ?? props.produto.image_url ?? null;
 });
 
 const selectedPixelTab = ref('meta');
@@ -1205,6 +1220,9 @@ function submit() {
         }
         fd.append('currency', form.currency);
         fd.append('is_active', form.is_active ? '1' : '0');
+        if (form.course_access_days !== '' && form.course_access_days != null) {
+            fd.append('course_access_days', String(form.course_access_days));
+        }
         fd.append('conversion_pixels', JSON.stringify(form.conversion_pixels));
         // Envia texto simples; o backend monta o HTML bonito automaticamente.
         const cre = form.cart_recovery_email && typeof form.cart_recovery_email === 'object' ? form.cart_recovery_email : {};
@@ -1271,12 +1289,17 @@ function submit() {
             fd.append('pagarme_billing[company_address][state]', String(ca.state || '').slice(0, 2));
         }
         fd.append('_method', 'PUT');
-        fd.append('image', form.image);
+        if (form.image) {
+            fd.append('image', form.image);
+        }
         form.transform(() => fd).post(url, { forceFormData: true });
     } else {
         form.transform((data) => {
             if (data.billing_type === 'subscription') {
                 data.base_interval = data.base_interval || 'monthly';
+            }
+            if (data.course_access_days === '' || data.course_access_days == null) {
+                data.course_access_days = null;
             }
             return data;
         }).put(url);
@@ -1408,28 +1431,87 @@ function submit() {
                                         :class="inputClass"
                                     />
                                 </div>
+                                <div v-if="isAreaMembrosProduct" class="max-w-xs">
+                                    <label class="mb-1.5 block text-sm font-medium text-zinc-700 dark:text-zinc-300">Duração do acesso (dias)</label>
+                                    <input
+                                        v-model.number="form.course_access_days"
+                                        type="number"
+                                        min="0"
+                                        max="3650"
+                                        placeholder="Sem limite"
+                                        :class="inputClass"
+                                    />
+                                    <p class="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+                                        Tempo que o aluno terá o curso disponível após matrícula ou nova compra. Deixe vazio para acesso sem prazo.
+                                    </p>
+                                    <p v-if="form.errors.course_access_days" class="mt-1 text-sm text-red-600 dark:text-red-400">{{ form.errors.course_access_days }}</p>
+                                </div>
                                 <div class="flex flex-wrap items-center gap-4 pt-1">
                                     <Toggle v-model="form.is_active" label="Produto ativo" />
                                 </div>
                             </div>
-                            <div class="flex flex-col items-start lg:pt-0">
-                                <label class="mb-2 block text-sm font-medium text-zinc-700 dark:text-zinc-300">Imagem do produto</label>
-                                <p class="mb-2 text-xs text-zinc-500 dark:text-zinc-400">1:1, ex.: 400×400 px.</p>
-                                <label
-                                    class="relative flex h-28 w-28 shrink-0 cursor-pointer flex-col items-center justify-center overflow-hidden rounded-xl border-2 border-dashed border-zinc-200 bg-zinc-50/80 transition hover:border-[var(--color-primary)]/50 hover:bg-[var(--color-primary)]/5 dark:border-zinc-600 dark:bg-zinc-800/80 dark:hover:border-[var(--color-primary)]/40 dark:hover:bg-[var(--color-primary)]/10"
-                                >
-                                    <template v-if="currentImageUrl">
-                                        <img :src="currentImageUrl" alt="Preview" class="h-full w-full object-cover" />
-                                        <span class="absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 transition opacity hover:opacity-100">
-                                            <span class="rounded-lg bg-white/90 px-2 py-1 text-xs font-medium text-zinc-800 dark:bg-zinc-900 dark:text-white">Trocar</span>
-                                        </span>
-                                    </template>
-                                    <template v-else>
-                                        <ImageIcon class="h-8 w-8 text-zinc-400 dark:text-zinc-500" />
-                                        <span class="mt-1 text-center text-xs font-medium text-zinc-600 dark:text-zinc-400">{{ form.image?.name || 'Enviar' }}</span>
-                                    </template>
-                                    <input type="file" accept="image/*" class="hidden" @change="onFileChange" />
-                                </label>
+                            <div class="flex flex-col gap-6 sm:flex-row sm:items-start lg:pt-0">
+                                <div v-if="isAreaMembrosProduct" class="flex w-full max-w-md flex-col items-stretch">
+                                    <label class="mb-2 block text-sm font-medium text-zinc-700 dark:text-zinc-300">Capa do curso</label>
+                                    <p class="mb-2 text-xs text-zinc-500 dark:text-zinc-400">
+                                        Recomendado {{ COURSE_COVER_WIDTH }}×{{ COURSE_COVER_HEIGHT }} px. Usada no checkout e na área do aluno (hub /area-membros).
+                                    </p>
+                                    <label
+                                        class="relative flex aspect-[1060/663] w-full max-w-sm cursor-pointer flex-col items-center justify-center overflow-hidden rounded-xl border-2 border-dashed border-zinc-200 bg-zinc-50/80 transition hover:border-[var(--color-primary)]/50 hover:bg-[var(--color-primary)]/5 dark:border-zinc-600 dark:bg-zinc-800/80 dark:hover:border-[var(--color-primary)]/40 dark:hover:bg-[var(--color-primary)]/10"
+                                    >
+                                        <template v-if="currentCourseCoverUrl">
+                                            <img :src="currentCourseCoverUrl" alt="Capa do curso" class="h-full w-full object-cover" />
+                                            <span class="absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 transition hover:opacity-100">
+                                                <span class="rounded-lg bg-white/90 px-2 py-1 text-xs font-medium text-zinc-800 dark:bg-zinc-900 dark:text-white">Trocar</span>
+                                            </span>
+                                        </template>
+                                        <template v-else>
+                                            <ImageIcon class="h-10 w-10 text-zinc-400 dark:text-zinc-500" />
+                                            <span class="mt-2 text-center text-xs font-medium text-zinc-600 dark:text-zinc-400">{{ form.image?.name || 'Enviar capa' }}</span>
+                                        </template>
+                                        <input type="file" accept="image/*" class="hidden" @change="onFileChange" />
+                                    </label>
+                                </div>
+                                <div v-else class="flex flex-col items-start">
+                                    <label class="mb-2 block text-sm font-medium text-zinc-700 dark:text-zinc-300">Imagem do produto</label>
+                                    <p class="mb-2 text-xs text-zinc-500 dark:text-zinc-400">1:1, ex.: 400×400 px.</p>
+                                    <label
+                                        class="relative flex h-28 w-28 shrink-0 cursor-pointer flex-col items-center justify-center overflow-hidden rounded-xl border-2 border-dashed border-zinc-200 bg-zinc-50/80 transition hover:border-[var(--color-primary)]/50 hover:bg-[var(--color-primary)]/5 dark:border-zinc-600 dark:bg-zinc-800/80 dark:hover:border-[var(--color-primary)]/40 dark:hover:bg-[var(--color-primary)]/10"
+                                    >
+                                        <template v-if="currentImageUrl">
+                                            <img :src="currentImageUrl" alt="Preview" class="h-full w-full object-cover" />
+                                            <span class="absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 transition opacity hover:opacity-100">
+                                                <span class="rounded-lg bg-white/90 px-2 py-1 text-xs font-medium text-zinc-800 dark:bg-zinc-900 dark:text-white">Trocar</span>
+                                            </span>
+                                        </template>
+                                        <template v-else>
+                                            <ImageIcon class="h-8 w-8 text-zinc-400 dark:text-zinc-500" />
+                                            <span class="mt-1 text-center text-xs font-medium text-zinc-600 dark:text-zinc-400">{{ form.image?.name || 'Enviar' }}</span>
+                                        </template>
+                                        <input type="file" accept="image/*" class="hidden" @change="onFileChange" />
+                                    </label>
+                                </div>
+                                <div v-if="false" class="flex flex-col items-start">
+                                    <label class="mb-2 block text-sm font-medium text-zinc-700 dark:text-zinc-300">Capa da Área de Membros</label>
+                                    <p class="mb-2 max-w-xs text-xs text-zinc-500 dark:text-zinc-400">
+                                        2:3 vertical, ex.: 400×600 px. Exibida no hub /area-membros (cards dos cursos). Se vazio, usa a imagem 1:1.
+                                    </p>
+                                    <label
+                                        class="relative flex aspect-[2/3] w-28 shrink-0 cursor-pointer flex-col items-center justify-center overflow-hidden rounded-xl border-2 border-dashed border-zinc-200 bg-zinc-50/80 transition hover:border-[var(--color-primary)]/50 hover:bg-[var(--color-primary)]/5 dark:border-zinc-600 dark:bg-zinc-800/80 dark:hover:border-[var(--color-primary)]/40 dark:hover:bg-[var(--color-primary)]/10"
+                                    >
+                                        <template v-if="currentMemberAreaCoverUrl">
+                                            <img :src="currentMemberAreaCoverUrl" alt="Capa área de membros" class="h-full w-full object-cover" />
+                                            <span class="absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 transition opacity hover:opacity-100">
+                                                <span class="rounded-lg bg-white/90 px-2 py-1 text-xs font-medium text-zinc-800 dark:bg-zinc-900 dark:text-white">Trocar</span>
+                                            </span>
+                                        </template>
+                                        <template v-else>
+                                            <ImageIcon class="h-8 w-8 text-zinc-400 dark:text-zinc-500" />
+                                            <span class="mt-1 text-center text-xs font-medium text-zinc-600 dark:text-zinc-400">{{ form.member_area_cover?.name || 'Enviar' }}</span>
+                                        </template>
+                                        <input type="file" accept="image/*" class="hidden" @change="onMemberAreaCoverChange" />
+                                    </label>
+                                </div>
                             </div>
                         </div>
                     </div>

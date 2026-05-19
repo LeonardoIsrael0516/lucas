@@ -8,6 +8,7 @@ import { Bell, ChevronDown, User, X, Camera, Lock, CheckCircle, AlertCircle, Men
 
 const page = usePage();
 const props = computed(() => page.props);
+const appSettings = computed(() => props.value?.appSettings ?? {});
 const product = computed(() => props.value?.product ?? {});
 const config = computed(() => props.value?.config ?? {});
 const slug = computed(() => props.value?.slug ?? '');
@@ -16,11 +17,29 @@ const vapid_public = computed(() => props.value?.vapid_public ?? null);
 const base_url = computed(() => props.value?.base_url ?? '');
 
 const user = computed(() => props.value?.auth?.user ?? null);
-const theme = computed(() => config.value?.theme ?? {});
+const theme = computed(() => ({
+    ...(config.value?.theme ?? {}),
+    primary: appSettings.value?.theme_primary || config.value?.theme?.primary || '#0ea5e9',
+}));
 const sidebar = computed(() => config.value?.sidebar ?? {});
-const headerLogo = computed(() => config.value?.header?.logo_url ?? null);
+const headerLogo = computed(
+    () =>
+        appSettings.value?.app_logo_dark ||
+        appSettings.value?.app_logo ||
+        config.value?.logos?.logo_dark ||
+        config.value?.header?.logo_url ||
+        null
+);
 const sidebarItems = computed(() => {
-    const base = sidebar.value?.items ?? [{ title: 'Início', icon: 'home', link: '/', open_external: false }];
+    const raw = sidebar.value?.items ?? [{ title: 'Início', icon: 'home', link: '/', open_external: false }];
+    const base = raw.filter((item) => {
+        const title = String(item?.title || '').trim().toLowerCase();
+        const link = String(item?.link || '').trim();
+        // "Início" não deve aparecer no header/menu mobile desta área.
+        if (title === 'início' || title === 'inicio') return false;
+        if (link === '/' || link === '') return false;
+        return true;
+    });
 
     // Atalho fixo para voltar à lista de cursos do aluno (fora do PWA /m/{slug}).
     const backLink = '/area-membros';
@@ -34,15 +53,14 @@ const sidebarItems = computed(() => {
 /** Número de itens no nav: sidebar + comunidade (se ativa). Se > 2, em mobile mostra hamburger. */
 const totalNavCount = computed(() => {
     const items = sidebarItems.value.length;
-    const withCommunity = config.value?.community_enabled ? 1 : 0;
-    return items + withCommunity;
+    return items;
 });
 const certificateEnabled = computed(() => (config.value?.certificate ?? {})?.enabled ?? false);
 const showMobileHamburger = computed(() => totalNavCount.value > 2);
 
 const gamificationEnabled = computed(() => (config.value?.gamification ?? {})?.enabled ?? false);
 const gamificationAchievements = computed(() => props.value?.gamification_achievements ?? []);
-const showGamificationBadge = computed(() => gamificationEnabled.value && gamificationAchievements.value.length > 0);
+const showGamificationBadge = computed(() => false);
 const gamificationDropdownOpen = ref(false);
 const gamificationDropdownRef = ref(null);
 const lastUnlockedAchievement = computed(() => {
@@ -86,17 +104,8 @@ function onWindowScroll() {
 }
 
 const basePath = computed(() => `/m/${slug.value}`);
-/** Path do login da área atual (slug em path ou /login em domínio/subdomínio próprio). */
-const memberAreaLoginPath = computed(() => {
-    if (typeof window !== 'undefined') {
-        return window.location.pathname.startsWith('/m/') ? `${basePath.value}/login` : '/login';
-    }
-    const bu = props.value?.base_url;
-    if (bu && typeof bu === 'string' && bu.includes('/m/')) {
-        return `${basePath.value}/login`;
-    }
-    return '/login';
-});
+/** Login único da escola (global). */
+const memberAreaLoginPath = computed(() => '/login');
 const logoutHref = computed(() => {
     const target = memberAreaLoginPath.value;
     return `/logout?redirect=${encodeURIComponent(target)}`;
@@ -519,13 +528,6 @@ watch(
                             {{ item.title }}
                         </Link>
                     </template>
-                    <Link
-                        v-if="config?.community_enabled"
-                        :href="`${basePath}/comunidade`"
-                        class="rounded-lg px-3 py-2 text-sm font-medium text-white/90 drop-shadow hover:bg-white/10"
-                    >
-                        Comunidade
-                    </Link>
                 </nav>
                 <!-- Botão hamburger: só quando mais de 2 itens E em telas pequenas (md:hidden quando showMobileHamburger) -->
                 <button
@@ -656,18 +658,6 @@ watch(
                             Minha conta
                         </button>
                         <Link
-                            v-if="certificateEnabled"
-                            :href="`${basePath}/certificado`"
-                            class="flex w-full items-center gap-2 px-4 py-2.5 text-left text-sm font-medium text-zinc-700 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800"
-                            role="menuitem"
-                            @click="accountMenuOpen = false"
-                        >
-                            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4M7.835 4.697a3.42 3.42 0 001.946-.806 3.42 3.42 0 014.438 0 3.42 3.42 0 001.946.806 3.42 3.42 0 013.138 3.138 3.42 3.42 0 00.806 1.946 3.42 3.42 0 010 4.438 3.42 3.42 0 00-.806 1.946 3.42 3.42 0 01-3.138 3.138 3.42 3.42 0 00-1.946.806 3.42 3.42 0 01-4.438 0 3.42 3.42 0 00-1.946-.806 3.42 3.42 0 01-3.138-3.138 3.42 3.42 0 00-.806-1.946 3.42 3.42 0 010-4.438 3.42 3.42 0 00.806-1.946 3.42 3.42 0 013.138-3.138z" />
-                            </svg>
-                            Certificado
-                        </Link>
-                        <Link
                             :href="logoutHref"
                             method="post"
                             as="button"
@@ -726,14 +716,6 @@ watch(
                                 {{ item.title }}
                             </Link>
                         </template>
-                        <Link
-                            v-if="config?.community_enabled"
-                            :href="`${basePath}/comunidade`"
-                            class="rounded-lg px-4 py-3 text-sm font-medium text-zinc-200 hover:bg-zinc-800 hover:text-white"
-                            @click="closeMobileMenu"
-                        >
-                            Comunidade
-                        </Link>
                     </nav>
                     <div v-if="canRegisterPush && !pushRegistered" class="border-t border-zinc-700 px-4 py-3">
                         <button
@@ -773,17 +755,6 @@ watch(
                                 <User class="h-4 w-4" />
                                 Minha conta
                             </button>
-                            <Link
-                                v-if="certificateEnabled"
-                                :href="`${basePath}/certificado`"
-                                class="flex w-full items-center gap-2 rounded-lg px-4 py-3 text-left text-sm font-medium text-zinc-300 hover:bg-zinc-800"
-                                @click="closeMobileMenu"
-                            >
-                                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4M7.835 4.697a3.42 3.42 0 001.946-.806 3.42 3.42 0 014.438 0 3.42 3.42 0 001.946.806 3.42 3.42 0 013.138 3.138 3.42 3.42 0 00.806 1.946 3.42 3.42 0 010 4.438 3.42 3.42 0 00-.806 1.946 3.42 3.42 0 01-3.138 3.138 3.42 3.42 0 00-1.946.806 3.42 3.42 0 01-4.438 0 3.42 3.42 0 00-1.946-.806 3.42 3.42 0 01-3.138-3.138 3.42 3.42 0 00-.806-1.946 3.42 3.42 0 010-4.438 3.42 3.42 0 00.806-1.946 3.42 3.42 0 013.138-3.138z" />
-                                </svg>
-                                Certificado
-                            </Link>
                             <Link
                                 :href="logoutHref"
                                 method="post"

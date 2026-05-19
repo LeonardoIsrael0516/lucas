@@ -73,6 +73,9 @@ const currentTab = computed(() => {
     return TABS.some((tab) => tab.id === t) ? t : 'installed';
 });
 
+/** Plugins nativos (ex.: white-label) não aparecem na lista — continuam ativos e com aba em Configurações. */
+const visibleInstalledPlugins = computed(() => (Array.isArray(props.plugins) ? props.plugins : []).filter((p) => !p?.is_native));
+
 const storeDetail = ref(null);
 const installingSlug = ref(null);
 const storeBannerFailed = ref({});
@@ -387,18 +390,23 @@ function submitManualInstall() {
                     para instalar manualmente.
                 </p>
                 <div
-                    v-if="plugins.length === 0"
+                    v-if="visibleInstalledPlugins.length === 0"
                     class="rounded-xl border border-zinc-200 bg-zinc-50 p-6 text-center text-zinc-500 dark:border-zinc-700 dark:bg-zinc-800/50 dark:text-zinc-400"
                 >
-                    Nenhum plugin encontrado na pasta
-                    <code class="rounded bg-zinc-200 px-1.5 py-0.5 text-sm dark:bg-zinc-700">plugins/</code>.
+                    <template v-if="plugins.length === 0">
+                        Nenhum plugin encontrado na pasta
+                        <code class="rounded bg-zinc-200 px-1.5 py-0.5 text-sm dark:bg-zinc-700">plugins/</code>.
+                    </template>
+                    <template v-else>
+                        Não há plugins adicionais para listar (plugins nativos do sistema não aparecem aqui).
+                    </template>
                 </div>
                 <div
                     v-else
                     class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3"
                 >
                     <div
-                        v-for="plugin in plugins"
+                        v-for="plugin in visibleInstalledPlugins"
                         :key="plugin.slug"
                         class="flex flex-col overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-sm transition-all duration-200 hover:border-zinc-300 hover:shadow-md dark:border-zinc-700 dark:bg-zinc-800 dark:hover:border-zinc-600"
                     >

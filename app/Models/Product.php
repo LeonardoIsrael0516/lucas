@@ -33,6 +33,8 @@ class Product extends Model
         'type',
         'billing_type',
         'image',
+        'member_area_cover',
+        'course_access_days',
         'price',
         'currency',
         'is_active',
@@ -478,17 +480,6 @@ class Product extends Model
                     ['title' => 'Início', 'icon' => 'home', 'link' => '/', 'open_external' => false],
                 ],
             ],
-            'login' => [
-                'logo' => '',
-                'background_image' => '',
-                'background_color' => '#18181b',
-                'primary_color' => '#0ea5e9',
-                'title' => 'Área de Membros',
-                'subtitle' => 'Entre com seu e-mail e senha',
-                'password_mode' => 'auto',
-                'default_password' => '',
-                'login_without_password' => false,
-            ],
             'pwa' => [
                 'name' => '',
                 'short_name' => '',
@@ -528,12 +519,16 @@ class Product extends Model
         if (($theme['sidebar_bg'] ?? '') === '#1e293b') {
             $config['theme']['sidebar_bg'] = '#27272a';
         }
+        unset($config['login']);
+
         return $config;
     }
 
     public function users(): BelongsToMany
     {
-        return $this->belongsToMany(User::class, 'product_user')->withTimestamps();
+        return $this->belongsToMany(User::class, 'product_user')
+            ->withTimestamps()
+            ->withPivot('access_expires_at');
     }
 
     public function scopeForTenant($query, ?int $tenantId)
@@ -552,6 +547,11 @@ class Product extends Model
     public function memberSections(): HasMany
     {
         return $this->hasMany(MemberSection::class)->orderBy('position');
+    }
+
+    public function memberModules(): HasMany
+    {
+        return $this->hasMany(MemberModule::class)->orderBy('position');
     }
 
     public function memberInternalProducts(): HasMany
@@ -596,12 +596,7 @@ class Product extends Model
 
     public function hasMemberAreaAccess(User $user): bool
     {
-        // Admin/Infoprodutor do mesmo tenant do produto tem acesso automático à área de membros
-        // (usuário de equipe não deve ganhar acesso automático)
-        if (($user->isAdmin() || $user->isInfoprodutor()) && $user->tenant_id === $this->tenant_id) {
-            return true;
-        }
-        return $this->users()->where('user_id', $user->id)->exists();
+        return app(\App\Services\ProductAccessService::class)->hasActiveAccess($this, $user);
     }
 
     /**

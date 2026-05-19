@@ -9,11 +9,12 @@ use App\Models\MemberLessonProgress;
 use App\Models\MemberModule;
 use App\Models\Order;
 use App\Models\Product;
-use App\Models\Setting;
 use App\Models\Subscription;
 use App\Services\MemberAreaResolver;
 use App\Services\MemberProgressService;
 use App\Services\StorageService;
+use App\Support\StudentAreaBranding;
+use App\Support\StudentAreaSettings;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
@@ -40,7 +41,7 @@ class MemberAreaController extends Controller
         $ownedProducts = $user->products()
             ->orderBy('name')
             ->get()
-            ->filter(fn (Product $p) => $p->type === Product::TYPE_AREA_MEMBROS);
+            ->filter(fn (Product $p) => $p->type === Product::TYPE_AREA_MEMBROS && $p->hasMemberAreaAccess($user));
 
         event(new MemberAreaLoaded($user, $ownedProducts));
 
@@ -63,19 +64,7 @@ class MemberAreaController extends Controller
         if (! $tenantId) {
             $tenantId = (int) ($ownedProducts->first()?->tenant_id ?? 0) ?: null;
         }
-        $studentBranding = [
-            'primary' => (string) Setting::get('student_area_primary', '#0ea5e9', $tenantId),
-            'logo_url' => null,
-        ];
-        $logoPath = (string) Setting::get('student_area_logo', '', $tenantId);
-        if ($logoPath !== '') {
-            try {
-                $storage = new StorageService($tenantId);
-                $studentBranding['logo_url'] = $storage->exists($logoPath) ? $storage->url($logoPath) : null;
-            } catch (\Throwable) {
-                $studentBranding['logo_url'] = null;
-            }
-        }
+        $studentBranding = StudentAreaBranding::forTenant($tenantId);
         $ownedIds = $ownedProducts->pluck('id')->all();
         $otherQuery = Product::query()
             ->where('tenant_id', $tenantId)
@@ -96,12 +85,17 @@ class MemberAreaController extends Controller
                 'id' => $product->id,
                 'name' => $product->name,
                 'image_url' => $product->image ? $otherStorage->url($product->image) : null,
+                'cover_url' => $this->productCoverUrl($product, $otherStorage),
                 'price_label' => $this->formatMoney((float) $product->price, $product->currency ?? 'BRL'),
                 'checkout_url' => route('checkout.show', ['slug' => $product->checkout_slug]),
             ];
         }
 
-        $communityHref = $this->firstCommunityHref($ownedProducts, $user);
+        $hubNav = [
+            'community_enabled' => StudentAreaSettings::communityEnabled($tenantId),
+            'certificate_enabled' => StudentAreaSettings::certificateEnabled($tenantId),
+            'gamification_enabled' => StudentAreaSettings::gamificationEnabled($tenantId),
+        ];
 
         return Inertia::render('MemberArea/Dashboard', array_merge([
             'search_query' => $q,
@@ -114,7 +108,7 @@ class MemberAreaController extends Controller
             'continue_items' => $continueItems,
             'my_courses' => $myCourses,
             'other_courses' => $otherCourses,
-            'community_href' => $communityHref,
+            'hub_nav' => $hubNav,
             'profile_href' => route('profile.index'),
             'student_branding' => $studentBranding,
         ], $this->studentSupportPayload($tenantId)));
@@ -134,6 +128,7 @@ class MemberAreaController extends Controller
             'id' => $product->id,
             'name' => $product->name,
             'image_url' => $product->image ? $storage->url($product->image) : null,
+            'cover_url' => $this->productCoverUrl($product, $storage),
             'access_until_label' => $expiry ? 'Acesso até '.$expiry->format('m/Y') : null,
             'apostilas_label' => $pdfStats['total'] > 0
                 ? $pdfStats['total'].' '.($pdfStats['total'] === 1 ? 'apostila' : 'apostilas')
@@ -171,7 +166,7 @@ class MemberAreaController extends Controller
             if (! $product || $product->type !== Product::TYPE_AREA_MEMBROS) {
                 continue;
             }
-            if (! $user->products()->where('products.id', $product->id)->exists()) {
+            if (! $product->hasMemberAreaAccess($user)) {
                 continue;
             }
             if ($q !== '' && mb_stripos($product->name, $q, 0, 'UTF-8') === false) {
@@ -201,7 +196,7 @@ class MemberAreaController extends Controller
                 'page_current' => null,
                 'page_total' => null,
                 'lesson_href' => $lessonHref,
-                'thumbnail_url' => $product->image ? $storage->url($product->image) : null,
+                'thumbnail_url' => $this->productCoverUrl($product, $storage),
             ];
 
             if (count($items) >= 9) {
@@ -228,23 +223,21 @@ class MemberAreaController extends Controller
 
     private function collectOrderedLessonIds(Product $product): array
     {
-        $sections = $product->memberSections()
-            ->with(['modules' => fn ($q) => $q->orderBy('position')])
+        $modules = $product->memberModules()
+            ->with(['lessons' => fn ($q) => $q->orderBy('position')])
             ->orderBy('position')
             ->get();
 
         $ids = [];
-        foreach ($sections as $section) {
-            foreach ($section->modules as $module) {
-                $effective = $module->source_member_module_id
-                    ? MemberModule::query()->with(['lessons' => fn ($q) => $q->orderBy('position')])->find($module->source_member_module_id)
-                    : $module;
-                if (! $effective) {
-                    continue;
-                }
-                foreach ($effective->lessons->sortBy('position') as $lesson) {
-                    $ids[] = (int) $lesson->id;
-                }
+        foreach ($modules as $module) {
+            $effective = $module->source_member_module_id
+                ? MemberModule::query()->with(['lessons' => fn ($q) => $q->orderBy('position')])->find($module->source_member_module_id)
+                : $module;
+            if (! $effective) {
+                continue;
+            }
+            foreach ($effective->lessons->sortBy('position') as $lesson) {
+                $ids[] = (int) $lesson->id;
             }
         }
 
@@ -276,6 +269,14 @@ class MemberAreaController extends Controller
     private function accessExpiry(Product $product, $user): ?Carbon
     {
         $dates = [];
+
+        $pivotEnd = DB::table('product_user')
+            ->where('product_id', $product->id)
+            ->where('user_id', $user->id)
+            ->value('access_expires_at');
+        if ($pivotEnd) {
+            $dates[] = Carbon::parse($pivotEnd)->endOfDay();
+        }
 
         $orderEnd = Order::query()
             ->where('user_id', $user->id)
@@ -343,31 +344,20 @@ class MemberAreaController extends Controller
             ->first();
 
         if ($log && is_array($log->metadata) && ! empty($log->metadata['lesson_id'])) {
-            return $baseUrl.'/aula/'.$log->metadata['lesson_id'];
+            $lessonId = (int) $log->metadata['lesson_id'];
+            $moduleId = (int) ($log->metadata['module_id'] ?? 0);
+            if (! $moduleId) {
+                $lesson = MemberLesson::query()->find($lessonId);
+                $moduleId = (int) ($lesson?->member_module_id ?? 0);
+            }
+            if ($moduleId) {
+                return $baseUrl.'/modulo/'.$moduleId.'?aula='.$lessonId;
+            }
+
+            return $baseUrl.'/aula/'.$lessonId;
         }
 
         return $baseUrl;
-    }
-
-    private function firstCommunityHref($ownedProducts, $user): ?string
-    {
-        foreach ($ownedProducts as $product) {
-            $config = $product->member_area_config ?? [];
-            if (! (bool) ($config['community_enabled'] ?? false)) {
-                continue;
-            }
-            if (! $product->checkout_slug) {
-                continue;
-            }
-            if (! $product->hasMemberAreaAccess($user)) {
-                continue;
-            }
-            $base = rtrim($this->resolver->baseUrlForProduct($product), '/');
-
-            return $base.'/comunidade';
-        }
-
-        return null;
     }
 
     private function initials(string $name): string
@@ -404,5 +394,18 @@ class MemberAreaController extends Controller
         } catch (\Throwable) {
             return 0;
         }
+    }
+
+    private function productCoverUrl(Product $product, StorageService $storage): ?string
+    {
+        if ($product->member_area_cover) {
+            return $storage->url($product->member_area_cover);
+        }
+
+        if ($product->image) {
+            return $storage->url($product->image);
+        }
+
+        return null;
     }
 }

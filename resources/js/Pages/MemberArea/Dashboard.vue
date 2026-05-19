@@ -1,8 +1,10 @@
 <script setup>
-import { computed, ref } from 'vue';
+import { computed, ref, toRef } from 'vue';
 import { Head, Link, router } from '@inertiajs/vue3';
 import ThemeToggler from '@/components/layout/ThemeToggler.vue';
-import { Bell, BookOpen, ChevronRight, LayoutGrid, LifeBuoy, Lock, LogOut, MessageCircle, Search, UserRound } from 'lucide-vue-next';
+import StudentCourseCover from '@/components/student/StudentCourseCover.vue';
+import { useStudentAreaSidebarLogo } from '@/composables/useStudentAreaLogo';
+import { Award, Bell, BookOpen, ChevronRight, LayoutGrid, LifeBuoy, Lock, LogOut, MessageCircle, Search, Trophy, UserRound } from 'lucide-vue-next';
 
 const props = defineProps({
     search_query: { type: String, default: '' },
@@ -11,15 +13,30 @@ const props = defineProps({
     continue_items: { type: Array, default: () => [] },
     my_courses: { type: Array, default: () => [] },
     other_courses: { type: Array, default: () => [] },
-    community_href: { type: String, default: null },
+    hub_nav: {
+        type: Object,
+        default: () => ({ community_enabled: false, certificate_enabled: false, gamification_enabled: false }),
+    },
     suporte_href: { type: String, default: null },
     profile_href: { type: String, default: '/meu-perfil' },
-    student_branding: { type: Object, default: () => ({ primary: '#0ea5e9', logo_url: null }) },
+    student_branding: {
+        type: Object,
+        default: () => ({
+            primary: '#0ea5e9',
+            logo_url: null,
+            logo_light_url: null,
+            logo_light_collapsed_url: null,
+            logo_dark_url: null,
+            logo_dark_collapsed_url: null,
+        }),
+    },
     support_whatsapp: { type: Object, default: () => ({ enabled: false, url: '' }) },
 });
 
 const searchLocal = ref(props.search_query || '');
 const hasUnread = computed(() => (props.notifications_unread_count || 0) > 0);
+const sidebarCollapsed = ref(false);
+const { sidebarLogoUrl } = useStudentAreaSidebarLogo(toRef(props, 'student_branding'), sidebarCollapsed);
 
 function submitSearch(e) {
     e.preventDefault();
@@ -39,51 +56,106 @@ function lessonProgressBar(item) {
     >
         <Head title="Meus cursos" />
 
-        <aside class="hidden w-56 shrink-0 flex-col border-r border-zinc-200 bg-white py-6 dark:border-zinc-800 dark:bg-zinc-900 md:flex">
+        <aside
+            class="hidden shrink-0 flex-col border-r border-zinc-200 bg-white py-6 transition-all dark:border-zinc-800 dark:bg-zinc-900 md:flex"
+            :class="sidebarCollapsed ? 'w-20' : 'w-64'"
+        >
             <div class="mb-8 px-4">
-                <div class="flex items-center gap-2">
-                    <img v-if="student_branding?.logo_url" :src="student_branding.logo_url" alt="Logo" class="h-7 w-auto max-w-[160px] object-contain" />
-                    <div v-else class="text-lg font-semibold tracking-tight text-zinc-900 dark:text-white">Minha Plataforma</div>
+                <div class="mb-3 flex items-center justify-end">
+                    <button
+                        type="button"
+                        class="rounded-lg border border-zinc-200 p-1.5 text-zinc-600 hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                        :title="sidebarCollapsed ? 'Expandir menu' : 'Recolher menu'"
+                        @click="sidebarCollapsed = !sidebarCollapsed"
+                    >
+                        <ChevronRight class="h-4 w-4 transition-transform" :class="sidebarCollapsed ? '' : 'rotate-180'" />
+                    </button>
+                </div>
+                <div class="flex items-center justify-center">
+                    <img
+                        v-if="sidebarLogoUrl"
+                        :src="sidebarLogoUrl"
+                        alt="Logo"
+                        class="h-auto w-auto max-h-14 object-contain"
+                    />
+                    <div v-else class="text-lg font-semibold tracking-tight text-zinc-900 dark:text-white" :class="sidebarCollapsed ? 'hidden' : ''">Minha Plataforma</div>
                 </div>
             </div>
             <nav class="flex flex-1 flex-col gap-1 px-2">
                 <a
                     href="#sec-meus-cursos"
-                    class="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium"
+                    class="flex items-center rounded-lg px-3 py-2.5 text-sm font-medium"
+                    :class="sidebarCollapsed ? 'justify-center' : 'gap-3'"
                     :style="{ backgroundColor: 'color-mix(in srgb, var(--student-primary) 18%, transparent)', color: 'var(--student-primary)' }"
                 >
                     <LayoutGrid class="h-5 w-5 shrink-0" />
-                    Meus cursos
+                    <span v-if="!sidebarCollapsed">Meus cursos</span>
                 </a>
-                <Link v-if="profile_href" :href="profile_href" class="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800">
+                <Link
+                    v-if="profile_href"
+                    :href="profile_href"
+                    class="flex items-center rounded-lg px-3 py-2.5 text-sm font-medium text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800"
+                    :class="sidebarCollapsed ? 'justify-center' : 'gap-3'"
+                >
                     <UserRound class="h-5 w-5 shrink-0" />
-                    Meu perfil
+                    <span v-if="!sidebarCollapsed">Meu perfil</span>
                 </Link>
-                <a v-if="community_href" :href="community_href" class="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800">
+                <Link
+                    v-if="hub_nav?.community_enabled"
+                    href="/area-membros/comunidade"
+                    class="flex items-center rounded-lg px-3 py-2.5 text-sm font-medium text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800"
+                    :class="sidebarCollapsed ? 'justify-center' : 'gap-3'"
+                >
                     <MessageCircle class="h-5 w-5 shrink-0" />
-                    Comunidade
-                </a>
-                <span v-else class="flex cursor-not-allowed items-center gap-3 rounded-lg px-3 py-2.5 text-sm text-zinc-400 opacity-60 dark:text-zinc-500" title="Entre em um curso com comunidade ativa">
-                    <MessageCircle class="h-5 w-5 shrink-0" />
-                    Comunidade
-                </span>
+                    <span v-if="!sidebarCollapsed">Comunidade</span>
+                </Link>
+                <Link
+                    v-if="hub_nav?.certificate_enabled"
+                    href="/area-membros/certificados"
+                    class="flex items-center rounded-lg px-3 py-2.5 text-sm font-medium text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800"
+                    :class="sidebarCollapsed ? 'justify-center' : 'gap-3'"
+                >
+                    <Award class="h-5 w-5 shrink-0" />
+                    <span v-if="!sidebarCollapsed">Certificados</span>
+                </Link>
+                <Link
+                    v-if="hub_nav?.gamification_enabled"
+                    href="/area-membros/conquistas"
+                    class="flex items-center rounded-lg px-3 py-2.5 text-sm font-medium text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800"
+                    :class="sidebarCollapsed ? 'justify-center' : 'gap-3'"
+                >
+                    <Trophy class="h-5 w-5 shrink-0" />
+                    <span v-if="!sidebarCollapsed">Conquistas</span>
+                </Link>
                 <Link
                     v-if="suporte_href"
                     :href="suporte_href"
-                    class="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800"
+                    class="flex items-center rounded-lg px-3 py-2.5 text-sm font-medium text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800"
+                    :class="sidebarCollapsed ? 'justify-center' : 'gap-3'"
                 >
                     <LifeBuoy class="h-5 w-5 shrink-0" />
-                    Suporte
+                    <span v-if="!sidebarCollapsed">Suporte</span>
                 </Link>
-                <span v-else class="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm text-zinc-400 dark:text-zinc-500" title="Suporte não disponível">
+                <span
+                    v-else
+                    class="flex items-center rounded-lg px-3 py-2.5 text-sm text-zinc-400 dark:text-zinc-500"
+                    :class="sidebarCollapsed ? 'justify-center' : 'gap-3'"
+                    title="Suporte não disponível"
+                >
                     <LifeBuoy class="h-5 w-5 shrink-0" />
-                    Suporte
+                    <span v-if="!sidebarCollapsed">Suporte</span>
                 </span>
             </nav>
             <div class="mt-auto border-t border-zinc-200 px-2 pt-4 dark:border-zinc-800">
-                <Link href="/logout" method="post" as="button" class="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm font-medium text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800">
+                <Link
+                    href="/logout"
+                    method="post"
+                    as="button"
+                    class="flex w-full items-center rounded-lg px-3 py-2.5 text-left text-sm font-medium text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800"
+                    :class="sidebarCollapsed ? 'justify-center' : 'gap-3'"
+                >
                     <LogOut class="h-5 w-5 shrink-0" />
-                    Sair
+                    <span v-if="!sidebarCollapsed">Sair</span>
                 </Link>
             </div>
         </aside>
@@ -129,9 +201,8 @@ function lessonProgressBar(item) {
                             :href="item.lesson_href"
                             class="group flex flex-col overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-sm transition hover:shadow-md dark:border-zinc-800 dark:bg-zinc-900"
                         >
-                            <div class="relative aspect-video bg-gradient-to-br from-zinc-800 to-zinc-950">
-                                <img v-if="item.thumbnail_url" :src="item.thumbnail_url" :alt="item.product_name" class="h-full w-full object-cover opacity-80 group-hover:opacity-100" />
-                                <div class="absolute inset-0 flex items-center justify-center">
+                            <StudentCourseCover :src="item.thumbnail_url" :alt="item.product_name" img-class="opacity-80 group-hover:opacity-100">
+                                <div v-if="!item.thumbnail_url" class="absolute inset-0 flex items-center justify-center">
                                     <BookOpen class="h-12 w-12 text-white/40" />
                                 </div>
                                 <div class="absolute left-2 right-2 top-2 flex justify-between text-xs font-medium text-white drop-shadow">
@@ -139,7 +210,7 @@ function lessonProgressBar(item) {
                                     <span v-else class="text-white/80">—</span>
                                     <span class="text-white/70">pág. —/—</span>
                                 </div>
-                            </div>
+                            </StudentCourseCover>
                             <div class="flex flex-1 flex-col p-4">
                                 <p class="text-xs font-medium text-sky-600 dark:text-sky-400">
                                     <template v-if="item.module_title">{{ item.module_title }}</template>
@@ -156,16 +227,15 @@ function lessonProgressBar(item) {
 
                 <section id="sec-meus-cursos">
                     <h2 class="mb-4 text-lg font-semibold text-zinc-900 dark:text-white">Meus cursos</h2>
-                    <div v-if="my_courses.length" class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+                    <div v-if="my_courses.length" class="grid gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
                         <div v-for="c in my_courses" :key="c.id" class="flex flex-col overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
-                            <div class="relative aspect-video bg-gradient-to-br from-zinc-800 to-zinc-950">
-                                <img v-if="c.image_url" :src="c.image_url" :alt="c.name" class="h-full w-full object-cover" />
+                            <StudentCourseCover :src="c.cover_url" :alt="c.name">
                                 <span v-if="c.has_new_content" class="absolute left-2 top-2 rounded-full bg-emerald-500 px-2 py-0.5 text-xs font-semibold text-white">Novo conteúdo</span>
                                 <span v-if="c.access_until_label" class="absolute right-2 top-2 rounded bg-black/50 px-2 py-0.5 text-xs text-white">{{ c.access_until_label }}</span>
-                                <div class="absolute inset-0 flex items-center justify-center">
+                                <div v-if="!c.cover_url" class="absolute inset-0 flex items-center justify-center">
                                     <span class="text-2xl font-bold tracking-tight text-white/90 drop-shadow">{{ c.name?.slice(0, 8) }}</span>
                                 </div>
-                            </div>
+                            </StudentCourseCover>
                             <div class="flex flex-1 flex-col p-4">
                                 <h3 class="font-semibold text-zinc-900 dark:text-white">{{ c.name }}</h3>
                                 <p v-if="c.apostilas_label" class="mt-1 text-sm text-zinc-600 dark:text-zinc-400">{{ c.apostilas_label }}</p>
@@ -206,14 +276,13 @@ function lessonProgressBar(item) {
 
                 <section>
                     <h2 class="mb-4 text-lg font-semibold text-zinc-900 dark:text-white">Outros cursos disponíveis</h2>
-                    <div v-if="other_courses.length" class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+                    <div v-if="other_courses.length" class="grid gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
                         <div v-for="c in other_courses" :key="c.id" class="flex flex-col overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
-                            <div class="relative aspect-video bg-gradient-to-br from-zinc-800 to-zinc-950">
-                                <img v-if="c.image_url" :src="c.image_url" :alt="c.name" class="h-full w-full object-cover opacity-70" />
+                            <StudentCourseCover :src="c.cover_url" :alt="c.name" img-class="opacity-70">
                                 <div class="absolute inset-0 flex items-center justify-center">
                                     <Lock class="h-14 w-14 text-white/50" />
                                 </div>
-                            </div>
+                            </StudentCourseCover>
                             <div class="flex flex-1 flex-col p-4">
                                 <h3 class="font-semibold text-zinc-900 dark:text-white">{{ c.name }}</h3>
                                 <p class="mt-2 text-sm font-semibold text-red-600 dark:text-red-400">{{ c.price_label }}</p>

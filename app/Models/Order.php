@@ -178,22 +178,24 @@ class Order extends Model
     public function grantPurchasedProductAccessToBuyer(): void
     {
         $this->loadMissing(
+            'user',
             'orderItems.product',
             'product',
             'subscriptionPlan',
             'productOffer'
         );
+        $user = $this->user;
+        if (! $user) {
+            return;
+        }
+        $access = app(\App\Services\ProductAccessService::class);
         if ($this->product) {
-            $this->product->users()->syncWithoutDetaching([$this->user_id]);
+            $access->grant($user, $this->product);
         }
         foreach ($this->orderItems as $item) {
             if ($item->product) {
-                $item->product->users()->syncWithoutDetaching([$this->user_id]);
+                $access->grant($user, $item->product);
             }
-        }
-
-        if (! $this->user_id) {
-            return;
         }
 
         $comboProductIds = [];
@@ -211,7 +213,7 @@ class Order extends Model
             }
             $combo = Product::query()->find($comboProductId);
             if ($combo) {
-                $combo->users()->syncWithoutDetaching([$this->user_id]);
+                $access->grant($user, $combo);
             }
         }
     }

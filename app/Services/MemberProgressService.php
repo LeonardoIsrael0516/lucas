@@ -117,12 +117,15 @@ class MemberProgressService
      */
     public function canIssueCertificate(Product $product, User $user): bool
     {
-        $config = $product->member_area_config;
-        $cert = $config['certificate'] ?? [];
+        $tenantId = $product->tenant_id ? (int) $product->tenant_id : null;
+        $cert = \App\Support\StudentAreaSettings::certificateConfig($tenantId);
         if (empty($cert['enabled'])) {
-            return false;
+            $legacy = ($product->member_area_config ?? [])['certificate'] ?? [];
+            if (empty($legacy['enabled'])) {
+                return false;
+            }
         }
-        $requiredPercent = (int) ($cert['completion_percent'] ?? 100);
+        $requiredPercent = \App\Support\StudentAreaSettings::certificateCompletionPercentForProduct($product);
         $percent = $this->completionPercent($product, $user);
         if ($percent < $requiredPercent) {
             return false;

@@ -1,13 +1,14 @@
 <script setup>
-import { ref, onMounted, onUnmounted, computed } from 'vue';
+import { ref, onMounted, onUnmounted, computed, watch } from 'vue';
 import { Link, router } from '@inertiajs/vue3';
 import MemberAreaAppLayout from '@/Layouts/MemberAreaAppLayout.vue';
 import Button from '@/components/ui/Button.vue';
 import MemberAreaVideoPlayer from '@/components/MemberAreaVideoPlayer.vue';
 import MemberPdfPresentationViewer from '@/components/MemberPdfPresentationViewer.vue';
 import MemberPdfReader from '@/components/MemberPdfReader.vue';
+import LessonTabs from '@/components/LessonTabs.vue';
 import { formatLessonDescription } from '@/lib/utils';
-import { Link as LinkIcon, CheckCircle } from 'lucide-vue-next';
+import { Link as LinkIcon, CheckCircle, ChevronDown, Lock } from 'lucide-vue-next';
 
 defineOptions({ layout: MemberAreaAppLayout });
 
@@ -19,7 +20,7 @@ const props = defineProps({
     lessons: { type: Array, default: () => [] },
     current_lesson: { type: Object, default: null },
     progress_percent: { type: Number, default: 0 },
-    sections: { type: Array, default: () => [] },
+    modules: { type: Array, default: () => [] },
     comments_enabled: { type: Boolean, default: false },
     comments_require_approval: { type: Boolean, default: true },
     lesson_comments: { type: Array, default: () => [] },
@@ -85,12 +86,47 @@ const currentPdfReaderFiles = computed(() =>
 );
 
 const lessonSidebarQuery = ref('');
-const filteredLessons = computed(() => {
+
+const lessonTabsPrimary = computed(() => props.config?.theme?.primary || '');
+
+const formattedOverviewHtml = computed(() =>
+    props.current_lesson?.content_text ? formatLessonDescription(props.current_lesson.content_text) : ''
+);
+
+const downloadableLessonFiles = computed(() => {
+    const cl = props.current_lesson;
+    if (!cl) return [];
+    const mapNamed = (list) =>
+        (Array.isArray(list) ? list : []).map((f) => ({
+            url: f.url,
+            name: f.name || 'PDF',
+            hint: null,
+        }));
+    if (cl.type === 'pdf_reader') return mapNamed(currentPdfReaderFiles.value);
+    if (cl.type === 'pdf_presentation') return mapNamed(currentPresentationFiles.value);
+    if (cl.type === 'pdf') return mapNamed(currentPdfFiles.value);
+    return [];
+});
+
+const allowLessonDownloads = computed(() => true);
+
+function handleLessonDownload({ file }) {
+    if (!file?.url) return;
+    const a = document.createElement('a');
+    a.href = file.url;
+    a.download = (file.name || 'documento.pdf').replace(/[^\w.\-\u00C0-\u024F]+/g, '_');
+    a.rel = 'noopener';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+}
+
+function filteredLessonsForModule(m) {
     const q = lessonSidebarQuery.value.trim().toLowerCase();
-    const list = props.lessons || [];
+    const list = Array.isArray(m?.lessons) ? m.lessons : [];
     if (!q) return list;
     return list.filter((l) => (l.title || '').toLowerCase().includes(q));
-});
+}
 
 const courseProgress = computed(() => props.course_lesson_progress || { completed: 0, total: 0 });
 
@@ -101,33 +137,54 @@ let autoCompleteTimer = null;
 const isLessonCompleted = (lesson) => lesson.is_completed || completedLessonIds.value.has(lesson.id);
 const isPdfLessonType = (t) => t === 'pdf' || t === 'pdf_presentation' || t === 'pdf_reader';
 
-function lessonUrl(lessonId) {
-    return `/m/${props.slug}/modulo/${props.module.id}?aula=${lessonId}`;
-}
-
-function moduleUrl(moduleId) {
-    return `/m/${props.slug}/modulo/${moduleId}`;
+function lessonUrl(moduleId, lessonId) {
+    return `/m/${props.slug}/modulo/${moduleId}?aula=${lessonId}`;
 }
 
 const moduleId = computed(() => props.module?.id);
-const expandedModuleId = computed(() => moduleId.value);
+
 const allModules = computed(() => {
-    const sections = Array.isArray(props.sections) ? props.sections : [];
-    const out = [];
-    for (const s of sections) {
-        const mods = Array.isArray(s?.modules) ? s.modules : [];
-        for (const m of mods) {
-            out.push({
-                id: m.id,
-                title: m.title,
-                section_title: s.title,
-                is_locked: !!m.is_locked,
-                lock_message: m.lock_message || null,
-            });
-        }
-    }
-    return out;
+    const list = Array.isArray(props.modules) ? props.modules : [];
+    return list.map((m) => ({
+        id: m.id,
+        title: m.title,
+        thumbnail: m.thumbnail || null,
+        cover_mode: m.cover_mode === 'horizontal' ? 'horizontal' : 'vertical',
+        lessons: Array.isArray(m.lessons) ? m.lessons : [],
+        is_locked: !!m.is_locked,
+        lock_message: m.lock_message || null,
+    }));
 });
+
+const expandedModuleIds = ref(new Set());
+
+watch(
+    moduleId,
+    (id) => {
+        if (id == null) return;
+        const next = new Set(expandedModuleIds.value);
+        next.add(id);
+        expandedModuleIds.value = next;
+    },
+    { immediate: true }
+);
+
+function isModuleExpanded(mid) {
+    return expandedModuleIds.value.has(mid);
+}
+
+function toggleModuleExpansion(m) {
+    if (m.is_locked) return;
+    const mid = m.id;
+    const next = new Set(expandedModuleIds.value);
+    if (next.has(mid)) next.delete(mid);
+    else next.add(mid);
+    expandedModuleIds.value = next;
+}
+
+const moduleCoverMode = computed(() =>
+    props.module?.cover_mode === 'horizontal' ? 'horizontal' : 'vertical'
+);
 
 function markComplete() {
     if (!props.current_lesson || completed.value) return;
@@ -228,10 +285,12 @@ function onPdfReaderLastPage() {
                         <div class="p-4">
                             <MemberPdfPresentationViewer :files="currentPresentationFiles" />
                         </div>
-                        <div
-                            v-if="current_lesson.content_text"
-                            class="prose prose-invert max-w-none border-t border-zinc-700 p-6"
-                            v-html="formatLessonDescription(current_lesson.content_text)"
+                        <LessonTabs
+                            :overview-html="formattedOverviewHtml"
+                            :downloadable-files="downloadableLessonFiles"
+                            :allow-download="allowLessonDownloads"
+                            :primary-color="lessonTabsPrimary"
+                            @download="handleLessonDownload"
                         />
                     </template>
                     <template v-else-if="current_lesson.type === 'pdf_reader' && currentPdfReaderFiles.length">
@@ -246,10 +305,12 @@ function onPdfReaderLastPage() {
                                 @last-page-reached="onPdfReaderLastPage"
                             />
                         </div>
-                        <div
-                            v-if="current_lesson.content_text"
-                            class="prose prose-invert max-w-none border-t border-zinc-700 p-6"
-                            v-html="formatLessonDescription(current_lesson.content_text)"
+                        <LessonTabs
+                            :overview-html="formattedOverviewHtml"
+                            :downloadable-files="downloadableLessonFiles"
+                            :allow-download="allowLessonDownloads"
+                            :primary-color="lessonTabsPrimary"
+                            @download="handleLessonDownload"
                         />
                     </template>
                     <template v-else-if="current_lesson.type === 'pdf' && currentPdfFiles.length">
@@ -269,8 +330,15 @@ function onPdfReaderLastPage() {
                                 </a>
                             </div>
                         </div>
+                        <LessonTabs
+                            :overview-html="formattedOverviewHtml"
+                            :downloadable-files="downloadableLessonFiles"
+                            :allow-download="allowLessonDownloads"
+                            :primary-color="lessonTabsPrimary"
+                            @download="handleLessonDownload"
+                        />
                     </template>
-                    <div v-else-if="current_lesson.type === 'pdf' && current_lesson.content_text" class="prose prose-invert max-w-none border-t border-zinc-700 p-6" v-html="formatLessonDescription(current_lesson.content_text)" />
+                    <div v-else-if="current_lesson.type === 'pdf' && current_lesson.content_text && !currentPdfFiles.length" class="prose prose-invert max-w-none border-t border-zinc-700 p-6" v-html="formatLessonDescription(current_lesson.content_text)" />
                     <template v-else-if="current_lesson.type === 'text' && current_lesson.content_text">
                         <div class="prose prose-invert max-w-none p-6" v-html="current_lesson.content_text" />
                     </template>
@@ -280,7 +348,7 @@ function onPdfReaderLastPage() {
                 </div>
 
                 <div class="flex items-center justify-between">
-                    <Link :href="`/m/${slug}`" class="text-sm text-zinc-400 hover:text-[var(--ma-primary)]">← Voltar ao início</Link>
+                    <Link :href="`/m/${slug}/modulos`" class="text-sm text-zinc-400 hover:text-[var(--ma-primary)]">← Lista de módulos</Link>
                     <Button @click="markComplete" :disabled="completed">
                         {{ completed ? (isPdfLessonType(current_lesson?.type) ? 'Baixado' : 'Concluído') : 'Marcar como concluído' }}
                     </Button>
@@ -321,15 +389,15 @@ function onPdfReaderLastPage() {
             <template v-else>
                 <div class="rounded-xl border border-zinc-700 bg-zinc-800/50 p-12 text-center">
                     <p class="text-zinc-500">Selecione uma aula na lista à direita.</p>
-                    <Link :href="`/m/${slug}`" class="mt-4 inline-block text-sm text-[var(--ma-primary)] hover:underline">← Voltar ao início</Link>
+                    <Link :href="`/m/${slug}/modulos`" class="mt-4 inline-block text-sm text-[var(--ma-primary)] hover:underline">← Lista de módulos</Link>
                 </div>
             </template>
             </main>
 
             <!-- Sidebar à direita: módulos + aulas -->
-            <aside class="w-full shrink-0 rounded-xl border border-zinc-700 bg-zinc-800/50 lg:w-72">
+            <aside class="w-full shrink-0 rounded-xl border border-zinc-700 bg-zinc-800/50 lg:w-80">
                 <div class="border-b border-zinc-700 p-4">
-                    <Link :href="`/m/${slug}`" class="text-sm text-zinc-400 hover:text-[var(--ma-primary)]">← Início</Link>
+                    <Link href="/area-membros" class="text-sm text-zinc-400 hover:text-[var(--ma-primary)]">← Meus cursos</Link>
                     <h2 class="mt-2 text-lg font-semibold">{{ module.title }}</h2>
                     <p v-if="module.section" class="text-xs text-zinc-500">{{ module.section.title }}</p>
                     <div v-if="courseProgress.total > 0" class="mt-3 space-y-1">
@@ -352,69 +420,105 @@ function onPdfReaderLastPage() {
                         autocomplete="off"
                     />
                 </div>
+
+                <div v-if="module.thumbnail" class="border-b border-zinc-700 p-3">
+                    <div
+                        class="relative overflow-hidden rounded-lg border border-zinc-600/80 bg-zinc-900"
+                        :class="moduleCoverMode === 'horizontal' ? 'aspect-video w-full' : 'aspect-[2/3] w-full max-w-[200px] mx-auto'"
+                    >
+                        <img :src="module.thumbnail" :alt="module.title" class="h-full w-full object-cover" />
+                        <div class="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent" />
+                        <p class="absolute inset-x-0 bottom-0 p-3 text-sm font-semibold leading-tight text-white drop-shadow-md">
+                            {{ module.title }}
+                        </p>
+                    </div>
+                </div>
+
                 <nav class="max-h-[60vh] overflow-y-auto p-2 space-y-1">
-                    <!-- Todos os módulos: o atual “expandido” (aulas aparecem abaixo) -->
                     <template v-if="allModules.length">
                         <template v-for="m in allModules" :key="m.id">
-                            <Link
-                                v-if="!m.is_locked"
-                                :href="moduleUrl(m.id)"
-                                class="flex items-center justify-between gap-2 rounded-lg px-3 py-2 text-left text-sm transition"
-                                :class="m.id === expandedModuleId
-                                    ? 'bg-zinc-700/40 text-white'
-                                    : 'text-zinc-300 hover:bg-zinc-700/30 hover:text-white'"
-                            >
-                                <span class="min-w-0 flex-1 truncate">{{ m.title || 'Sem título' }}</span>
-                                <span
-                                    class="shrink-0 text-[10px] text-zinc-500"
-                                    :class="m.id === expandedModuleId ? 'opacity-0' : ''"
-                                    aria-hidden="true"
+                            <div class="rounded-lg border border-transparent transition" :class="m.id === moduleId ? 'border-zinc-600/60 bg-zinc-900/40' : ''">
+                                <button
+                                    v-if="!m.is_locked"
+                                    type="button"
+                                    class="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm transition"
+                                    :class="m.id === moduleId ? 'text-white' : 'text-zinc-300 hover:bg-zinc-700/30 hover:text-white'"
+                                    @click="toggleModuleExpansion(m)"
                                 >
-                                    ·
-                                </span>
-                            </Link>
-                            <div v-else class="flex cursor-not-allowed items-center justify-between gap-2 rounded-lg px-3 py-2 text-left text-sm opacity-70">
-                                <span class="min-w-0 flex-1 truncate text-zinc-400">{{ m.title || 'Sem título' }}</span>
-                                <span v-if="m.lock_message" class="shrink-0 text-[10px] text-zinc-500">{{ m.lock_message }}</span>
-                            </div>
+                                    <div
+                                        v-if="m.thumbnail"
+                                        class="shrink-0 overflow-hidden rounded-md border border-zinc-600/80 bg-zinc-900"
+                                        :class="m.cover_mode === 'horizontal' ? 'aspect-video w-20' : 'aspect-[2/3] w-12'"
+                                    >
+                                        <img :src="m.thumbnail" alt="" class="h-full w-full object-cover" />
+                                    </div>
+                                    <div v-else class="flex h-12 w-12 shrink-0 items-center justify-center rounded-md border border-dashed border-zinc-600 bg-zinc-900/80 text-[10px] text-zinc-500">
+                                        Mod.
+                                    </div>
+                                    <div class="min-w-0 flex-1">
+                                        <span class="block truncate font-medium">{{ m.title || 'Sem título' }}</span>
+                                        <span class="text-[11px] text-zinc-500">{{ (m.lessons || []).length }} aulas</span>
+                                    </div>
+                                    <ChevronDown
+                                        class="h-4 w-4 shrink-0 text-zinc-500 transition-transform"
+                                        :class="isModuleExpanded(m.id) ? 'rotate-180' : ''"
+                                        aria-hidden="true"
+                                    />
+                                </button>
+                                <div v-else class="flex items-center gap-2 rounded-lg px-2 py-2 text-left text-sm opacity-75" :title="m.lock_message || ''">
+                                    <div
+                                        v-if="m.thumbnail"
+                                        class="shrink-0 overflow-hidden rounded-md border border-zinc-600/50 grayscale"
+                                        :class="m.cover_mode === 'horizontal' ? 'aspect-video w-20' : 'aspect-[2/3] w-12'"
+                                    >
+                                        <img :src="m.thumbnail" alt="" class="h-full w-full object-cover opacity-60" />
+                                    </div>
+                                    <Lock class="h-4 w-4 shrink-0 text-amber-500/90" aria-hidden="true" />
+                                    <div class="min-w-0 flex-1">
+                                        <span class="block truncate text-zinc-400">{{ m.title || 'Sem título' }}</span>
+                                        <span v-if="m.lock_message" class="text-[10px] text-zinc-500">{{ m.lock_message }}</span>
+                                    </div>
+                                </div>
 
-                            <!-- Aulas do módulo atual -->
-                            <div v-if="m.id === expandedModuleId" class="mt-1 space-y-1 pb-2">
-                                <template v-if="filteredLessons.length">
-                                    <template v-for="(lesson, idx) in filteredLessons" :key="lesson.id">
-                                        <Link
-                                            v-if="!lesson.is_locked"
-                                            :href="lessonUrl(lesson.id)"
-                                            class="group flex items-start gap-3 rounded-lg px-3 py-2 text-left text-sm transition"
-                                            :class="current_lesson?.id === lesson.id
-                                                ? 'bg-[var(--ma-primary)]/20 text-[var(--ma-primary)]'
-                                                : 'text-zinc-300 hover:bg-zinc-700/40 hover:text-white'"
-                                        >
-                                            <CheckCircle v-if="isLessonCompleted(lesson)" class="mt-0.5 h-4 w-4 shrink-0 text-emerald-500" />
-                                            <span v-else class="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full border border-zinc-500 text-xs">
-                                                {{ idx + 1 }}
-                                            </span>
-                                            <span class="min-w-0 flex-1">
-                                                <span class="block truncate">{{ lesson.title || 'Sem título' }}</span>
-                                                <span v-if="lesson.pages_count" class="mt-0.5 block text-[11px] text-zinc-500 group-hover:text-zinc-300">
-                                                    {{ lesson.pages_count }} pág.
+                                <div v-show="isModuleExpanded(m.id) && !m.is_locked" class="space-y-0.5 border-t border-zinc-700/50 px-1 pb-2 pt-1">
+                                    <template v-if="filteredLessonsForModule(m).length">
+                                        <template v-for="(lesson, idx) in filteredLessonsForModule(m)" :key="lesson.id">
+                                            <Link
+                                                v-if="!lesson.is_locked"
+                                                :href="lessonUrl(m.id, lesson.id)"
+                                                class="group flex items-start gap-2 rounded-lg px-2 py-2 text-left text-sm transition"
+                                                :class="
+                                                    current_lesson?.id === lesson.id && m.id === moduleId
+                                                        ? 'bg-[var(--ma-primary)]/20 text-[var(--ma-primary)]'
+                                                        : 'text-zinc-300 hover:bg-zinc-700/40 hover:text-white'
+                                                "
+                                            >
+                                                <CheckCircle v-if="isLessonCompleted(lesson)" class="mt-0.5 h-4 w-4 shrink-0 text-emerald-500" />
+                                                <span v-else class="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full border border-zinc-500 text-[10px]">
+                                                    {{ idx + 1 }}
                                                 </span>
-                                            </span>
-                                        </Link>
-                                        <div v-else class="flex cursor-not-allowed items-start gap-3 rounded-lg px-3 py-2 text-left text-sm opacity-70">
-                                            <span class="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full border border-zinc-600 text-xs">{{ idx + 1 }}</span>
-                                            <span class="min-w-0 flex-1">
-                                                <span class="block truncate text-zinc-400">{{ lesson.title || 'Sem título' }}</span>
-                                                <span v-if="lesson.pages_count" class="mt-0.5 block text-[11px] text-zinc-600">
-                                                    {{ lesson.pages_count }} pág.
+                                                <span class="min-w-0 flex-1">
+                                                    <span class="block truncate">{{ lesson.title || 'Sem título' }}</span>
+                                                    <span v-if="lesson.pages_count" class="mt-0.5 block text-[11px] text-zinc-500 group-hover:text-zinc-300">
+                                                        {{ lesson.pages_count }} pág.
+                                                    </span>
                                                 </span>
-                                            </span>
-                                            <span v-if="lesson.lock_message" class="shrink-0 text-[10px] text-zinc-500">{{ lesson.lock_message }}</span>
-                                        </div>
+                                            </Link>
+                                            <div v-else class="flex cursor-not-allowed items-start gap-2 rounded-lg px-2 py-2 text-left text-sm opacity-70">
+                                                <span class="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full border border-zinc-600 text-[10px]">{{ idx + 1 }}</span>
+                                                <span class="min-w-0 flex-1">
+                                                    <span class="block truncate text-zinc-400">{{ lesson.title || 'Sem título' }}</span>
+                                                    <span v-if="lesson.pages_count" class="mt-0.5 block text-[11px] text-zinc-600">
+                                                        {{ lesson.pages_count }} pág.
+                                                    </span>
+                                                </span>
+                                                <span v-if="lesson.lock_message" class="shrink-0 text-[10px] text-zinc-500">{{ lesson.lock_message }}</span>
+                                            </div>
+                                        </template>
                                     </template>
-                                </template>
-                                <p v-else-if="lessons.length" class="px-3 py-2 text-sm text-zinc-500">Nenhuma aula encontrada.</p>
-                                <p v-else class="px-3 py-2 text-sm text-zinc-500">Nenhuma aula neste módulo.</p>
+                                    <p v-else-if="(m.lessons || []).length" class="px-2 py-2 text-xs text-zinc-500">Nenhuma aula encontrada.</p>
+                                    <p v-else class="px-2 py-2 text-xs text-zinc-500">Nenhuma aula neste módulo.</p>
+                                </div>
                             </div>
                         </template>
                     </template>

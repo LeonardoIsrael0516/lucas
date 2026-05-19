@@ -14,6 +14,8 @@ import {
     Upload,
     Download,
     Palette,
+    LogIn,
+    MessageCircle,
 } from 'lucide-vue-next';
 import IntegrationCard from '@/components/IntegrationCard.vue';
 import EmailProviderSidebar from '@/components/EmailProviderSidebar.vue';
@@ -64,15 +66,25 @@ const props = defineProps({
 });
 
 function allAllowedTabIds() {
-    const core = ['email', 'storage', 'traducoes', 'aluno', 'cron', 'update'];
+    const core = ['email', 'storage', 'traducoes', 'cron', 'update'];
     const extra = (props.settings_plugin_tabs || []).map((t) => t.id).filter(Boolean);
     return [...core, ...extra];
 }
 
+const legacyStudentAreaTabRedirects = {
+    aluno: '/area-aluno/personalizacao',
+    suporte: '/area-aluno/suporte',
+    tela_login: '/area-aluno/login',
+};
+
 const activeTab = ref('email');
 if (typeof window !== 'undefined') {
     const t = new URLSearchParams(window.location.search).get('tab');
-    if (t && allAllowedTabIds().includes(t)) activeTab.value = t;
+    if (t && legacyStudentAreaTabRedirects[t]) {
+        window.location.replace(legacyStudentAreaTabRedirects[t]);
+    } else if (t && allAllowedTabIds().includes(t)) {
+        activeTab.value = t;
+    }
     const isMobile = window.matchMedia && window.matchMedia('(max-width: 639px)').matches;
     if (isMobile && activeTab.value === 'traducoes') activeTab.value = 'email';
 }
@@ -139,10 +151,18 @@ const form = useForm({
     storage_s3_endpoint: props.settings.storage_s3_endpoint ?? '',
     storage_s3_url: props.settings.storage_s3_url ?? '',
     student_area_primary: props.settings.student_area_primary ?? '#0ea5e9',
-    student_area_logo: null,
     student_support_enabled: !!props.settings.student_support_enabled,
     student_support_whatsapp_enabled: !!props.settings.student_support_whatsapp_enabled,
     student_support_whatsapp_url: props.settings.student_support_whatsapp_url ?? '',
+    login_title: props.settings.login_title ?? 'Área de Membros',
+    login_subtitle: props.settings.login_subtitle ?? 'Entre com seu e-mail e senha',
+    login_background_color: props.settings.login_background_color ?? '#18181b',
+    login_primary_color: props.settings.login_primary_color ?? '#0ea5e9',
+    login_logo: null,
+    login_background_image: null,
+    login_password_mode: props.settings.login_password_mode ?? 'auto',
+    login_default_password: props.settings.login_default_password ?? '',
+    login_without_password: !!props.settings.login_without_password,
 });
 
 const showCloudR2Override = ref(false);
@@ -158,10 +178,9 @@ const connectionTesting = vueRef(false);
 const sendTestSending = vueRef(false);
 
 const coreTabsStatic = [
-    { id: 'email', label: 'E‑MAIL', icon: Mail },
+    { id: 'email', label: 'E-mail', icon: Mail },
     { id: 'storage', label: 'Storage', icon: HardDrive },
     { id: 'traducoes', label: 'Traduções', icon: Languages },
-    { id: 'aluno', label: 'Aluno', icon: Palette },
     { id: 'cron', label: 'Cron', icon: Clock },
     { id: 'update', label: 'Update', icon: Download },
 ];
@@ -360,14 +379,14 @@ async function sendTestEmail() {
     try {
         await window.axios.post('/configuracoes/email/send-test', payload);
         sendResult.value.status = 'success';
-        sendResult.value.message = 'E‑mail de teste enviado com sucesso.';
+        sendResult.value.message = 'E-mail de teste enviado com sucesso.';
         setTimeout(() => {
             sendResult.value.status = null;
             sendResult.value.message = '';
         }, 4000);
     } catch (e) {
         sendResult.value.status = 'error';
-        let msg = 'Erro ao enviar e‑mail de teste.';
+        let msg = 'Erro ao enviar e-mail de teste.';
         if (e && e.response && e.response.data && e.response.data.error) {
             msg = e.response.data.error;
         }
@@ -533,7 +552,7 @@ function closeSidebar() {
 
 function saveFromSidebar() {
     form
-        .transform((data) => ({ ...data, _method: 'PUT' }))
+        .transform((data) => ({ ...data, _method: 'PUT', active_tab: activeTab.value }))
         .post('/configuracoes', {
         preserveScroll: true,
         forceFormData: true,
@@ -543,17 +562,23 @@ function saveFromSidebar() {
 
 function submitSettings() {
     form
-        .transform((data) => ({ ...data, _method: 'PUT' }))
+        .transform((data) => ({ ...data, _method: 'PUT', active_tab: activeTab.value }))
         .post('/configuracoes', {
             preserveScroll: true,
             forceFormData: true,
         });
 }
 
-function onStudentLogoChange(e) {
+function onLoginLogoChange(e) {
     const file = e?.target?.files?.[0];
     if (!file) return;
-    form.student_area_logo = file;
+    form.login_logo = file;
+}
+
+function onLoginBackgroundChange(e) {
+    const file = e?.target?.files?.[0];
+    if (!file) return;
+    form.login_background_image = file;
 }
 
 function isProviderConfigured(providerId) {
@@ -852,7 +877,7 @@ const selectClass =
                 <div v-show="activeTab === 'traducoes'" class="hidden space-y-6 sm:block">
                     <section class="overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-sm dark:border-zinc-700 dark:bg-zinc-800/50">
                         <div class="border-b border-zinc-200 bg-zinc-50 px-6 py-5 dark:border-zinc-700 dark:bg-zinc-800">
-                            <h2 class="text-base font-semibold text-zinc-900 dark:text-white">Checkout – textos por idioma</h2>
+                            <h2 class="text-base font-semibold text-zinc-900 dark:text-white">Checkout � textos por idioma</h2>
                             <p class="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
                                 Edite os textos exibidos no checkout. Português (BR), English, Español.
                             </p>
@@ -920,98 +945,11 @@ const selectClass =
 
             <!-- Aba Moedas removida: sistema fixo em BRL -->
 
-            <!-- Aba Aluno -->
-            <Transition
-                enter-active-class="transition duration-200 ease-out"
-                enter-from-class="opacity-0"
-                enter-to-class="opacity-100"
-                leave-active-class="transition duration-150 ease-in"
-                leave-from-class="opacity-100"
-                leave-to-class="opacity-0"
-            >
-                <div v-show="activeTab === 'aluno'" class="space-y-6">
-                    <section class="overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-sm dark:border-zinc-700 dark:bg-zinc-800/50">
-                        <div class="border-b border-zinc-200 bg-zinc-50 px-6 py-5 dark:border-zinc-700 dark:bg-zinc-800">
-                            <h2 class="text-base font-semibold text-zinc-900 dark:text-white">Personalização da área do aluno</h2>
-                            <p class="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
-                                Define cores e logo usados na tela <code class="rounded bg-zinc-100 px-1 py-0.5 font-mono text-xs dark:bg-zinc-900/40">/area-membros</code>.
-                            </p>
-                        </div>
-                        <div class="space-y-6 p-6">
-                            <div>
-                                <label class="mb-1 block text-xs font-medium text-zinc-600 dark:text-zinc-400">Cor principal</label>
-                                <div class="flex flex-wrap items-center gap-3">
-                                    <input v-model="form.student_area_primary" type="color" class="h-10 w-14 rounded-lg border border-zinc-200 bg-white p-1 dark:border-zinc-700 dark:bg-zinc-800" />
-                                    <input
-                                        v-model="form.student_area_primary"
-                                        type="text"
-                                        class="h-10 min-w-[220px] rounded-lg border border-zinc-200 bg-white px-3 text-sm dark:border-zinc-700 dark:bg-zinc-800"
-                                        placeholder="#0ea5e9"
-                                    />
-                                </div>
-                                <p v-if="form.errors.student_area_primary" class="mt-1 text-sm text-red-600">{{ form.errors.student_area_primary }}</p>
-                            </div>
-
-                            <div>
-                                <label class="mb-1 block text-xs font-medium text-zinc-600 dark:text-zinc-400">Logo (opcional)</label>
-                                <div v-if="props.settings?.student_area_logo_url" class="mb-3 flex items-center gap-3">
-                                    <img :src="props.settings.student_area_logo_url" alt="Logo atual" class="h-10 w-auto rounded bg-white p-2 shadow-sm dark:bg-zinc-900" />
-                                    <div class="text-xs text-zinc-600 dark:text-zinc-400">
-                                        Logo atual salva.
-                                    </div>
-                                </div>
-                                <input type="file" accept="image/*" class="block w-full text-sm text-zinc-600 dark:text-zinc-300" @change="onStudentLogoChange" />
-                                <p v-if="form.errors.student_area_logo" class="mt-1 text-sm text-red-600">{{ form.errors.student_area_logo }}</p>
-                                <p class="mt-2 text-xs text-zinc-500 dark:text-zinc-400">Recomendado: PNG/SVG com fundo transparente.</p>
-                            </div>
-                        </div>
-                    </section>
-
-                    <section class="overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-sm dark:border-zinc-700 dark:bg-zinc-800/50">
-                        <div class="border-b border-zinc-200 bg-zinc-50 px-6 py-5 dark:border-zinc-700 dark:bg-zinc-800">
-                            <h2 class="text-base font-semibold text-zinc-900 dark:text-white">Suporte aos alunos</h2>
-                            <p class="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
-                                Central de tickets e WhatsApp na área do aluno (<code class="rounded bg-zinc-100 px-1 py-0.5 font-mono text-xs dark:bg-zinc-900/40">/suporte</code>). Para responder pedidos, use o menu
-                                <strong>Suporte alunos</strong> no painel (equipe com permissão).
-                            </p>
-                        </div>
-                        <div class="space-y-6 p-6">
-                            <label class="flex cursor-pointer items-start gap-3">
-                                <input v-model="form.student_support_enabled" type="checkbox" class="mt-1 rounded border-zinc-300 dark:border-zinc-600" />
-                                <span>
-                                    <span class="block text-sm font-medium text-zinc-900 dark:text-white">Ativar central de tickets</span>
-                                    <span class="mt-0.5 block text-xs text-zinc-500 dark:text-zinc-400">Exibe o item Suporte na área do aluno e permite abrir tickets.</span>
-                                </span>
-                            </label>
-
-                            <label class="flex cursor-pointer items-start gap-3">
-                                <input v-model="form.student_support_whatsapp_enabled" type="checkbox" class="mt-1 rounded border-zinc-300 dark:border-zinc-600" />
-                                <span>
-                                    <span class="block text-sm font-medium text-zinc-900 dark:text-white">Mostrar botão WhatsApp</span>
-                                    <span class="mt-0.5 block text-xs text-zinc-500 dark:text-zinc-400">Botão flutuante na área do aluno (suporte habilitado).</span>
-                                </span>
-                            </label>
-
-                            <div>
-                                <label class="mb-1 block text-xs font-medium text-zinc-600 dark:text-zinc-400">Link do WhatsApp</label>
-                                <input
-                                    v-model="form.student_support_whatsapp_url"
-                                    type="url"
-                                    placeholder="https://wa.me/5511999999999"
-                                    class="w-full max-w-xl rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800"
-                                />
-                                <p v-if="form.errors.student_support_whatsapp_url" class="mt-1 text-sm text-red-600">{{ form.errors.student_support_whatsapp_url }}</p>
-                                <p class="mt-2 text-xs text-zinc-500 dark:text-zinc-400">Use o link gerado pelo WhatsApp (wa.me) ou api.whatsapp.com.</p>
-                            </div>
-                        </div>
-                    </section>
-                </div>
-            </Transition>
 
             <div
                 class="flex items-center gap-3 pt-4 sm:pt-2 md:pt-4 sticky bottom-4 z-10 -mx-2 rounded-xl border border-zinc-200 bg-white/95 px-4 py-3 shadow-lg backdrop-blur sm:static sm:mx-0 sm:rounded-none sm:border-0 sm:bg-transparent sm:px-0 sm:py-0 sm:shadow-none dark:border-zinc-700 dark:bg-zinc-800/95 sm:dark:bg-transparent sm:dark:border-0"
             >
-                <Button type="submit" :disabled="form.processing">Salvar alterações</Button>
+                <Button type="submit" :disabled="form.processing">Salvar altera��es</Button>
             </div>
         </form>
 

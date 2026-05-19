@@ -9,6 +9,7 @@ use App\Plugins\PluginRegistry;
 use App\Services\SalesAchievementsService;
 use App\Services\StorageService;
 use App\Services\TeamAccessService;
+use App\Support\SchoolLoginSettings;
 use Illuminate\Http\Request;
 use Inertia\Middleware;
 
@@ -104,6 +105,15 @@ class HandleInertiaRequests extends Middleware
             }
         }
 
+        $loginBranding = null;
+        if (! $user) {
+            $routeName = $request->route()?->getName();
+            if (in_array($routeName, ['login', 'password.request', 'password.reset'], true)) {
+                $tid = SchoolLoginSettings::resolveTenantId($request);
+                $loginBranding = SchoolLoginSettings::brandingForTenant($tid);
+            }
+        }
+
         $shared = [
             ...parent::share($request),
             'csrf_token' => $request->session()->token(),
@@ -138,6 +148,7 @@ class HandleInertiaRequests extends Middleware
             'cloud_billing_renew_window_days' => (int) config('getfy.cloud.billing_renew_window_days', 7),
             'appSettings' => $appSettings,
             'public_branding' => $publicBranding,
+            'login_branding' => $loginBranding,
             'settings_plugin_tabs' => $settingsPluginTabs,
             'pluginNavItems' => $pluginNavItems,
             'plugins' => $plugins,
@@ -170,6 +181,9 @@ class HandleInertiaRequests extends Middleware
             'alunos.index' => 'Alunos',
             'relatorios.index' => 'Relatórios',
             'settings.index' => 'Configurações',
+            'login' => 'Entrar',
+            'password.request' => 'Recuperar senha',
+            'password.reset' => 'Redefinir senha',
             'profile.index' => 'Meu perfil',
             'integrations.index' => 'Integrações',
             'plugins.index' => 'Plugins',
@@ -183,6 +197,15 @@ class HandleInertiaRequests extends Middleware
             'api-applications.create' => 'Nova aplicação API',
             'api-applications.edit' => 'Editar aplicação API',
             'conquistas.index' => 'Conquistas',
+            'area-aluno.personalizacao' => 'Área do aluno',
+            'area-aluno.login' => 'Tela de login',
+            'area-aluno.suporte' => 'Suporte',
+            'area-aluno.comunidade' => 'Comunidade',
+            'area-aluno.certificado' => 'Certificado',
+            'area-aluno.gamificacao' => 'Gamificação',
+            'student-hub.comunidade' => 'Comunidade',
+            'student-hub.certificados' => 'Certificados',
+            'student-hub.conquistas' => 'Conquistas',
         ];
 
         return $name ? ($titles[$name] ?? null) : null;

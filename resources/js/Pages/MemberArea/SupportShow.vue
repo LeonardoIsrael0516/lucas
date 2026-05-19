@@ -1,17 +1,31 @@
 <script setup>
 import { computed } from 'vue';
+import { useStudentAreaTheme, resolveStudentAreaLogoUrl } from '@/composables/useStudentAreaLogo';
 import { Head, Link, useForm, usePage } from '@inertiajs/vue3';
 import ThemeToggler from '@/components/layout/ThemeToggler.vue';
-import { ArrowLeft, Bell, LayoutGrid, LifeBuoy, LogOut, MessageCircle, UserRound } from 'lucide-vue-next';
+import { ArrowLeft, Award, Bell, LayoutGrid, LifeBuoy, LogOut, MessageCircle, Trophy, UserRound } from 'lucide-vue-next';
 
 const page = usePage();
 const props = defineProps({
     auth_user: { type: Object, default: () => ({}) },
     ticket: { type: Object, required: true },
     notifications_unread_count: { type: Number, default: 0 },
-    community_href: { type: String, default: null },
+    hub_nav: {
+        type: Object,
+        default: () => ({ community_enabled: false, certificate_enabled: false, gamification_enabled: false }),
+    },
     profile_href: { type: String, default: '/meu-perfil' },
-    student_branding: { type: Object, default: () => ({ primary: '#0ea5e9', logo_url: null }) },
+    student_branding: {
+        type: Object,
+        default: () => ({
+            primary: '#0ea5e9',
+            logo_url: null,
+            logo_light_url: null,
+            logo_light_collapsed_url: null,
+            logo_dark_url: null,
+            logo_dark_collapsed_url: null,
+        }),
+    },
     support_whatsapp: { type: Object, default: () => ({ enabled: false, url: '' }) },
 });
 
@@ -39,6 +53,9 @@ function fmtDate(iso) {
         return '—';
     }
 }
+
+const { isDark } = useStudentAreaTheme();
+const headerLogoUrl = computed(() => resolveStudentAreaLogoUrl(props.student_branding, isDark.value, false));
 </script>
 
 <template>
@@ -51,7 +68,7 @@ function fmtDate(iso) {
         <aside class="hidden w-56 shrink-0 flex-col border-r border-zinc-200 bg-white py-6 dark:border-zinc-800 dark:bg-zinc-900 md:flex">
             <div class="mb-8 px-4">
                 <Link href="/area-membros" class="flex items-center gap-2">
-                    <img v-if="student_branding?.logo_url" :src="student_branding.logo_url" alt="Logo" class="h-7 w-auto max-w-[160px] object-contain" />
+                    <img v-if="headerLogoUrl" :src="headerLogoUrl" alt="Logo" class="h-7 w-auto max-w-[160px] object-contain" />
                     <div v-else class="text-lg font-semibold tracking-tight text-zinc-900 dark:text-white">Minha Plataforma</div>
                 </Link>
             </div>
@@ -64,14 +81,18 @@ function fmtDate(iso) {
                     <UserRound class="h-5 w-5 shrink-0" />
                     Meu perfil
                 </Link>
-                <a v-if="community_href" :href="community_href" class="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800">
+                <Link v-if="hub_nav?.community_enabled" href="/area-membros/comunidade" class="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800">
                     <MessageCircle class="h-5 w-5 shrink-0" />
                     Comunidade
-                </a>
-                <span v-else class="flex cursor-not-allowed items-center gap-3 rounded-lg px-3 py-2.5 text-sm text-zinc-400 opacity-60 dark:text-zinc-500">
-                    <MessageCircle class="h-5 w-5 shrink-0" />
-                    Comunidade
-                </span>
+                </Link>
+                <Link v-if="hub_nav?.certificate_enabled" href="/area-membros/certificados" class="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800">
+                    <Award class="h-5 w-5 shrink-0" />
+                    Certificados
+                </Link>
+                <Link v-if="hub_nav?.gamification_enabled" href="/area-membros/conquistas" class="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800">
+                    <Trophy class="h-5 w-5 shrink-0" />
+                    Conquistas
+                </Link>
                 <Link
                     href="/suporte"
                     class="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium"

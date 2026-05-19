@@ -14,7 +14,6 @@ import Toggle from '@/components/ui/Toggle.vue';
 import {
     Palette,
     LayoutList,
-    LogIn,
     Layers,
     ShoppingBag,
     Users,
@@ -47,18 +46,6 @@ const configForm = useForm({
         hero: { ...props.produto.member_area_config?.hero },
         logos: { favicon: '', ...props.produto.member_area_config?.logos },
         sidebar: { ...props.produto.member_area_config?.sidebar },
-        login: {
-            title: '',
-            subtitle: '',
-            primary_color: '#0ea5e9',
-            background_color: '#18181b',
-            logo: '',
-            background_image: '',
-            password_mode: props.produto.member_area_config?.login?.password_mode ?? 'auto',
-            default_password: props.produto.member_area_config?.login?.default_password ?? '',
-            login_without_password: props.produto.member_area_config?.login?.login_without_password ?? false,
-            ...props.produto.member_area_config?.login,
-        },
         pwa: { name: '', short_name: '', theme_color: '#0ea5e9', push_enabled: false, ...props.produto.member_area_config?.pwa },
         certificate: { ...props.produto.member_area_config?.certificate },
         community_enabled: props.produto.member_area_config?.community_enabled ?? false,
@@ -69,17 +56,6 @@ const configForm = useForm({
 });
 
 const base = computed(() => `/produtos/${props.produto.id}/member-builder`);
-
-const loginAccessMode = computed({
-    get() {
-        const login = configForm.member_area_config?.login ?? {};
-        return login.login_without_password ? 'email_only' : (login.password_mode || 'auto');
-    },
-    set(value) {
-        configForm.member_area_config.login.login_without_password = value === 'email_only';
-        configForm.member_area_config.login.password_mode = value === 'email_only' ? 'auto' : value;
-    },
-});
 
 const pushSubscribersCount = computed(() => props.produto.push_subscribers_count ?? null);
 const pushForm = reactive({ title: '', body: '' });
@@ -129,7 +105,6 @@ const memberAreaFullLink = computed(() => {
 const tabs = [
     { id: 'aparencia', label: 'Aparência', icon: Palette, hasPreview: true, previewMode: 'area' },
     { id: 'sidebar', label: 'Sidebar', icon: LayoutList, hasPreview: true, previewMode: 'sidebar' },
-    { id: 'login', label: 'Login', icon: LogIn, hasPreview: true, previewMode: 'login' },
     { id: 'modulos', label: 'Módulos', icon: Layers, hasPreview: false },
     { id: 'loja', label: 'Loja interna', icon: ShoppingBag, hasPreview: false },
     { id: 'turmas', label: 'Turmas', icon: Users, hasPreview: false },
@@ -276,20 +251,15 @@ const inputClass = 'block w-full rounded-lg border border-zinc-300 bg-white px-3
             <div class="p-4">
                 <!-- Aparência -->
                 <template v-if="activeTab === 'aparencia'">
-                    <h2 class="mb-4 text-sm font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Tema e hero</h2>
+                    <h2 class="mb-4 text-sm font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Hero</h2>
                     <div class="space-y-4">
+                        <p class="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-900/40 dark:bg-amber-950/30 dark:text-amber-100">
+                            Cores e logos da área de membros são globais e vêm do White Label.
+                        </p>
                         <div>
                             <label class="mb-1 block text-xs font-medium text-zinc-600 dark:text-zinc-400">Favicon (ícone da aba do navegador)</label>
                             <input v-model="configForm.member_area_config.logos.favicon" type="url" :class="inputClass" class="w-full" placeholder="https://... ou /storage/..." />
                             <p class="mt-1 text-xs text-zinc-500 dark:text-zinc-400">URL do ícone. Usado na aba do navegador e no PWA. 192×192 ou 512×512 px.</p>
-                        </div>
-                        <div>
-                            <label class="mb-1 block text-xs font-medium text-zinc-600 dark:text-zinc-400">Cor primária</label>
-                            <input v-model="configForm.member_area_config.theme.primary" type="color" class="h-9 w-full cursor-pointer rounded-lg border dark:border-zinc-600" />
-                        </div>
-                        <div>
-                            <label class="mb-1 block text-xs font-medium text-zinc-600 dark:text-zinc-400">Fundo</label>
-                            <input v-model="configForm.member_area_config.theme.background" type="color" class="h-9 w-full cursor-pointer rounded-lg border dark:border-zinc-600" />
                         </div>
                         <div>
                             <label class="mb-1 block text-xs font-medium text-zinc-600 dark:text-zinc-400">Título do hero</label>
@@ -309,64 +279,6 @@ const inputClass = 'block w-full rounded-lg border border-zinc-300 bg-white px-3
                     <div class="space-y-4">
                         <Toggle v-model="configForm.member_area_config.sidebar.collapsible" label="Sidebar colapsável" />
                         <p class="text-xs text-zinc-500 dark:text-zinc-400">Itens do menu em sidebar.items (edição avançada).</p>
-                    </div>
-                    <Button type="button" class="mt-4" @click="saveConfig" :disabled="configForm.processing">Salvar</Button>
-                </template>
-
-                <!-- Login -->
-                <template v-else-if="activeTab === 'login'">
-                    <h2 class="mb-4 text-sm font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Tela de login</h2>
-                    <div class="space-y-4">
-                        <div>
-                            <label class="mb-1 block text-xs font-medium text-zinc-600 dark:text-zinc-400">Logo (URL)</label>
-                            <input v-model="configForm.member_area_config.login.logo" type="url" :class="inputClass" placeholder="https://..." />
-                        </div>
-                        <div>
-                            <label class="mb-1 block text-xs font-medium text-zinc-600 dark:text-zinc-400">Imagem de fundo (URL)</label>
-                            <input v-model="configForm.member_area_config.login.background_image" type="url" :class="inputClass" placeholder="https://..." />
-                        </div>
-                        <div>
-                            <label class="mb-1 block text-xs font-medium text-zinc-600 dark:text-zinc-400">Cor de fundo (sem imagem)</label>
-                            <div class="flex items-center gap-2">
-                                <input v-model="configForm.member_area_config.login.background_color" type="color" class="h-9 w-20 cursor-pointer rounded-lg border dark:border-zinc-600" />
-                                <input v-model="configForm.member_area_config.login.background_color" type="text" :class="inputClass" class="font-mono text-sm" placeholder="#18181b" />
-                            </div>
-                        </div>
-                        <div>
-                            <label class="mb-1 block text-xs font-medium text-zinc-600 dark:text-zinc-400">Título</label>
-                            <input v-model="configForm.member_area_config.login.title" type="text" :class="inputClass" placeholder="Área de Membros" />
-                        </div>
-                        <div>
-                            <label class="mb-1 block text-xs font-medium text-zinc-600 dark:text-zinc-400">Subtítulo</label>
-                            <input v-model="configForm.member_area_config.login.subtitle" type="text" :class="inputClass" placeholder="Entre com seu e-mail e senha" />
-                        </div>
-                        <div>
-                            <label class="mb-1 block text-xs font-medium text-zinc-600 dark:text-zinc-400">Cor primária (botão e links)</label>
-                            <input v-model="configForm.member_area_config.login.primary_color" type="color" class="h-9 w-full cursor-pointer rounded-lg border dark:border-zinc-600" />
-                        </div>
-                        <div class="border-t border-zinc-200 pt-4 dark:border-zinc-700">
-                            <label class="mb-2 block text-xs font-medium text-zinc-600 dark:text-zinc-400">Definir senha (novos acessos)</label>
-                            <p class="mb-2 text-xs text-zinc-500 dark:text-zinc-400">Escolha apenas uma opção.</p>
-                            <div class="space-y-2">
-                                <label class="flex items-center gap-2">
-                                    <input v-model="loginAccessMode" type="radio" value="auto" class="rounded border-zinc-300 text-[var(--color-primary)] focus:ring-[var(--color-primary)]" />
-                                    <span class="text-sm">Gerada automaticamente (aleatória) — enviada no e-mail de acesso</span>
-                                </label>
-                                <label class="flex items-center gap-2">
-                                    <input v-model="loginAccessMode" type="radio" value="default" class="rounded border-zinc-300 text-[var(--color-primary)] focus:ring-[var(--color-primary)]" />
-                                    <span class="text-sm">Senha padrão — todos os novos acessos usam a mesma senha</span>
-                                </label>
-                                <label class="flex items-center gap-2">
-                                    <input v-model="loginAccessMode" type="radio" value="email_only" class="rounded border-zinc-300 text-[var(--color-primary)] focus:ring-[var(--color-primary)]" />
-                                    <span class="text-sm">Permitir login apenas com e-mail (menos seguro) — campo de senha não é exibido</span>
-                                </label>
-                            </div>
-                            <div v-if="loginAccessMode === 'default'" class="mt-3">
-                                <label class="mb-1 block text-xs font-medium text-zinc-600 dark:text-zinc-400">Senha padrão</label>
-                                <input v-model="configForm.member_area_config.login.default_password" type="password" autocomplete="new-password" :class="inputClass" placeholder="Digite a senha padrão" class="max-w-xs" />
-                                <p class="mt-1 text-xs text-zinc-500 dark:text-zinc-400">Será usada por todos os alunos ao acessar esta área. Pode ser incluída no e-mail com a variável {senha} no template.</p>
-                            </div>
-                        </div>
                     </div>
                     <Button type="button" class="mt-4" @click="saveConfig" :disabled="configForm.processing">Salvar</Button>
                 </template>

@@ -1,19 +1,43 @@
 <script setup>
 import { ref, computed } from 'vue';
-import { useForm, Link, usePage } from '@inertiajs/vue3';
+import { useForm, Link, usePage, Head } from '@inertiajs/vue3';
 import { Eye, EyeOff } from 'lucide-vue-next';
-import Button from '@/components/ui/Button.vue';
 
 const showPassword = ref(false);
 const page = usePage();
 const flashError = computed(() => page.props.flash?.error ?? null);
 
-const branding = computed(() => page.props.public_branding ?? {});
-const primary = computed(() => branding.value.theme_primary || '#c8fa64');
-const appName = computed(() => branding.value.app_name || 'Getfy');
-const logoLight = computed(() => branding.value.app_logo_icon || 'https://cdn.getfy.cloud/collapsed-logo.png');
-const logoDark = computed(() => branding.value.app_logo_icon_dark || logoLight.value);
-const heroImage = computed(() => branding.value.login_hero_image || 'https://cdn.getfy.cloud/login.webp');
+const lb = computed(() => {
+    const b = page.props.login_branding;
+    if (b && typeof b === 'object') {
+        return b;
+    }
+    return {
+        title: 'Entrar',
+        subtitle: 'Entre com seu e-mail e senha',
+        background_color: '#18181b',
+        primary_color: '#0ea5e9',
+        logo_url: null,
+        background_image_url: null,
+        login_without_password: false,
+    };
+});
+
+const primary = computed(() => lb.value.primary_color || '#0ea5e9');
+const title = computed(() => lb.value.title || 'Área de Membros');
+const subtitle = computed(() => {
+    if (lb.value.subtitle) {
+        return lb.value.subtitle;
+    }
+    return lb.value.login_without_password ? 'Entre com seu e-mail' : 'Entre com seu e-mail e senha';
+});
+
+const backgroundStyle = computed(() => {
+    if (lb.value.background_image_url) {
+        return { backgroundImage: `url(${lb.value.background_image_url})` };
+    }
+    return { backgroundColor: lb.value.background_color || '#18181b' };
+});
 
 const form = useForm({
     email: '',
@@ -22,6 +46,12 @@ const form = useForm({
 });
 
 function submit() {
+    if (lb.value.login_without_password) {
+        form.post('/login-without-password', {
+            onFinish: () => form.reset('password'),
+        });
+        return;
+    }
     form.post('/login', {
         onFinish: () => form.reset('password'),
     });
@@ -29,59 +59,79 @@ function submit() {
 </script>
 
 <template>
-    <div class="wl-root flex min-h-screen">
-        <!-- Esquerda: formulário (~30%) -->
-        <div class="flex w-full flex-col justify-center px-8 py-12 lg:w-[30%] lg:min-w-[360px]">
-            <div class="text-center">
+    <Head>
+        <title>{{ title }}</title>
+        <meta name="theme-color" :content="primary" />
+    </Head>
+    <div
+        class="relative flex min-h-screen flex-col items-center justify-center bg-cover bg-center px-4 py-12 transition-colors"
+        :style="{
+            '--ma-primary': primary,
+            ...backgroundStyle,
+        }"
+    >
+        <div v-if="lb.background_image_url" class="absolute inset-0 bg-black/50" aria-hidden="true" />
+        <div
+            class="relative z-10 w-full max-w-md rounded-2xl border border-white/10 bg-zinc-900/90 p-8 shadow-2xl backdrop-blur-sm"
+        >
+            <div class="flex flex-col items-center text-center">
                 <img
-                    :src="logoLight"
-                    :alt="appName"
-                    class="mx-auto mb-10 h-12 w-auto object-contain dark:hidden"
+                    v-if="lb.logo_url"
+                    :src="lb.logo_url"
+                    :alt="title"
+                    class="mb-6 h-12 w-auto max-w-[200px] object-contain object-center"
                 />
-                <img
-                    :src="logoDark"
-                    :alt="appName"
-                    class="mx-auto mb-10 hidden h-12 w-auto object-contain dark:block"
-                />
-                <h1 class="text-2xl font-bold text-zinc-900 dark:text-white">Entrar</h1>
-                <p class="mt-1 text-sm text-zinc-600 dark:text-zinc-400">Acesse sua plataforma</p>
+                <h1 class="text-2xl font-bold tracking-tight text-white">
+                    {{ title }}
+                </h1>
+                <p class="mt-1.5 text-sm text-zinc-400">
+                    {{ subtitle }}
+                </p>
             </div>
-
             <p
                 v-if="flashError"
-                class="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200"
+                class="mt-4 rounded-xl border border-amber-500/40 bg-amber-500/15 px-4 py-3 text-center text-sm text-amber-100"
             >
                 {{ flashError }}
             </p>
             <form class="mt-8 space-y-5" @submit.prevent="submit">
                 <div>
-                    <label for="email" class="block text-sm font-medium text-zinc-700 dark:text-zinc-300">E-mail</label>
+                    <label for="email" class="mb-1.5 block text-sm font-medium text-zinc-300">E-mail</label>
                     <input
                         id="email"
                         v-model="form.email"
                         type="email"
                         autocomplete="email"
                         required
-                        class="wl-input mt-1.5 block w-full rounded-xl border border-zinc-300 bg-white px-4 py-3 text-zinc-900 placeholder-zinc-500 shadow-sm transition dark:border-zinc-600 dark:bg-zinc-900 dark:text-white dark:placeholder-zinc-500"
+                        class="w-full rounded-xl border border-zinc-600 bg-zinc-800/80 px-4 py-3 text-white placeholder-zinc-500 transition focus:border-[var(--ma-primary)] focus:outline-none focus:ring-2 focus:ring-[var(--ma-primary)]/30"
                         placeholder="seu@email.com"
                     />
-                    <p v-if="form.errors.email" class="mt-1.5 text-sm text-red-600 dark:text-red-400">{{ form.errors.email }}</p>
+                    <p v-if="form.errors.email" class="mt-1.5 text-sm text-red-400">{{ form.errors.email }}</p>
                 </div>
-                <div>
-                    <label for="password" class="block text-sm font-medium text-zinc-700 dark:text-zinc-300">Senha</label>
-                    <div class="relative mt-1.5">
+                <div v-if="!lb.login_without_password">
+                    <div class="mb-1.5 flex items-center justify-between">
+                        <label for="password" class="text-sm font-medium text-zinc-300">Senha</label>
+                        <Link
+                            href="/esqueci-senha"
+                            class="text-sm font-medium transition hover:underline"
+                            :style="{ color: primary }"
+                        >
+                            Esqueci minha senha
+                        </Link>
+                    </div>
+                    <div class="relative">
                         <input
                             id="password"
                             v-model="form.password"
                             :type="showPassword ? 'text' : 'password'"
                             autocomplete="current-password"
                             required
-                            class="wl-input block w-full rounded-xl border border-zinc-300 bg-white py-3 pl-4 pr-12 text-zinc-900 placeholder-zinc-500 shadow-sm transition dark:border-zinc-600 dark:bg-zinc-900 dark:text-white dark:placeholder-zinc-500"
+                            class="w-full rounded-xl border border-zinc-600 bg-zinc-800/80 py-3 pl-4 pr-12 text-white placeholder-zinc-500 transition focus:border-[var(--ma-primary)] focus:outline-none focus:ring-2 focus:ring-[var(--ma-primary)]/30"
                             placeholder="••••••••"
                         />
                         <button
                             type="button"
-                            class="wl-focus-ring absolute right-3 top-1/2 -translate-y-1/2 rounded p-1.5 text-zinc-500 transition hover:text-zinc-700 focus:outline-none dark:text-zinc-400 dark:hover:text-zinc-200"
+                            class="absolute right-3 top-1/2 -translate-y-1/2 rounded p-1.5 text-zinc-400 transition hover:text-zinc-200 focus:outline-none focus:ring-2 focus:ring-[var(--ma-primary)]/30"
                             :aria-label="showPassword ? 'Ocultar senha' : 'Mostrar senha'"
                             @click="showPassword = !showPassword"
                         >
@@ -89,75 +139,26 @@ function submit() {
                             <EyeOff v-else class="h-5 w-5" />
                         </button>
                     </div>
-                    <p v-if="form.errors.password" class="mt-1.5 text-sm text-red-600 dark:text-red-400">{{ form.errors.password }}</p>
+                    <p v-if="form.errors.password" class="mt-1.5 text-sm text-red-400">{{ form.errors.password }}</p>
                 </div>
                 <div class="flex items-center gap-3">
                     <input
                         id="remember"
                         v-model="form.remember"
                         type="checkbox"
-                        class="wl-checkbox h-4 w-4 rounded border-zinc-300 dark:border-zinc-600"
+                        class="h-4 w-4 rounded border-zinc-600 bg-zinc-800/80 text-[var(--ma-primary)] focus:ring-[var(--ma-primary)]/50"
                     />
-                    <label for="remember" class="text-sm text-zinc-700 dark:text-zinc-300">Lembrar de mim</label>
+                    <label for="remember" class="text-sm text-zinc-400">Lembrar de mim</label>
                 </div>
-                <Button
+                <button
                     type="submit"
-                    class="wl-submit w-full hover:!opacity-90"
+                    class="w-full rounded-xl px-4 py-3.5 font-semibold text-white shadow-lg transition hover:opacity-95 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-zinc-900 disabled:opacity-50"
+                    :style="{ backgroundColor: primary }"
                     :disabled="form.processing"
                 >
                     {{ form.processing ? 'Entrando…' : 'Entrar' }}
-                </Button>
+                </button>
             </form>
-
-            <p class="mt-6 text-center">
-                <Link href="/esqueci-senha" class="wl-link text-sm font-medium hover:underline focus:outline-none focus:ring-2 focus:ring-offset-2 dark:focus:ring-offset-zinc-900 rounded">
-                    Recuperar senha
-                </Link>
-            </p>
-        </div>
-
-        <div
-            class="relative hidden overflow-hidden bg-zinc-100 dark:bg-zinc-900 lg:flex lg:flex-1 lg:items-center lg:justify-center"
-            aria-hidden="true"
-        >
-            <div
-                class="hero-gradient absolute inset-0"
-                :style="{
-                    background: `linear-gradient(to bottom right, color-mix(in srgb, ${primary} 20%, transparent), transparent, rgba(14, 165, 233, 0.1))`,
-                }"
-            />
-            <img :src="heroImage" alt="" class="absolute inset-0 h-full w-full object-cover" />
-            <div class="absolute inset-0 bg-gradient-to-t from-black/25 via-black/5 to-transparent" />
         </div>
     </div>
 </template>
-
-<style scoped>
-.wl-root {
-    --wl-primary: v-bind(primary);
-}
-.wl-input:hover {
-    border-color: color-mix(in srgb, var(--wl-primary) 45%, var(--tw-border-color, #d4d4d8));
-}
-.wl-input:focus {
-    border-color: var(--wl-primary);
-    outline: none;
-    box-shadow: 0 0 0 2px color-mix(in srgb, var(--wl-primary) 35%, transparent);
-}
-.wl-focus-ring:focus {
-    box-shadow: 0 0 0 2px color-mix(in srgb, var(--wl-primary) 35%, transparent);
-}
-.wl-checkbox {
-    accent-color: var(--wl-primary);
-}
-.wl-submit {
-    background-color: var(--wl-primary) !important;
-    color: #18181b !important;
-}
-.wl-link {
-    color: var(--wl-primary);
-}
-.wl-link:focus {
-    --tw-ring-color: color-mix(in srgb, var(--wl-primary) 35%, transparent);
-}
-</style>

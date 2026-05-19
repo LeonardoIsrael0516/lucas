@@ -7,6 +7,7 @@ use App\Models\MemberComment;
 use App\Models\MemberAchievementUnlock;
 use App\Models\Product;
 use App\Models\User;
+use App\Support\StudentAreaSettings;
 
 class GamificationService
 {
@@ -28,8 +29,7 @@ class GamificationService
      */
     public function checkAndUnlock(Product $product, User $user): array
     {
-        $config = $product->member_area_config;
-        $gamification = $config['gamification'] ?? [];
+        $gamification = $this->gamificationConfigForProduct($product);
         if (empty($gamification['enabled']) || empty($gamification['achievements'])) {
             return [];
         }
@@ -88,8 +88,7 @@ class GamificationService
      */
     public function getAchievementsForUser(Product $product, User $user): array
     {
-        $config = $product->member_area_config;
-        $gamification = $config['gamification'] ?? [];
+        $gamification = $this->gamificationConfigForProduct($product);
         if (empty($gamification['enabled']) || empty($gamification['achievements'])) {
             return [];
         }
@@ -192,5 +191,54 @@ class GamificationService
             return (new \App\Services\StorageService($product->tenant_id))->url($image);
         }
         return rtrim(config('app.url'), '/') . '/' . ltrim($image, '/');
+    }
+
+    /**
+     * Conquistas globais do tenant; desbloqueio continua registrado por produto.
+     *
+     * @return array{enabled: bool, achievements: array<int, array<string, mixed>>}
+     */
+    public function gamificationConfigForProduct(Product $product): array
+    {
+        $tenantId = $product->tenant_id ? (int) $product->tenant_id : null;
+        $global = StudentAreaSettings::gamificationConfig($tenantId);
+        if (! empty($global['enabled']) || ! empty($global['achievements'])) {
+            return $global;
+        }
+
+        $legacy = ($product->member_area_config ?? [])['gamification'] ?? [];
+
+        return is_array($legacy) ? $legacy : ['enabled' => false, 'achievements' => []];
+    }
+
+    /**
+     * Todas as conquistas do aluno no tenant (vários cursos).
+     *
+     * @return array<int, array{id: string, title: string, description: string, image_url: string, unlocked: bool, unlocked_at: string|null, requirement_text: string, product_name: string|null}>
+     */
+    public function getAllAchievementsForUserInTenant(User $user, int $tenantId): array
+    {
+        $gamification = StudentAreaSettings::gamificationConfig($tenantId);
+        if (empty($gamification['enabled']) || empty($gamification['achievements'])) {
+            return [];
+        }
+
+        $ownedProducts = $user->products()
+            ->where('tenant_id', $tenantId)
+            ->where('type', Product::TYPE_AREA_MEMBROS)
+            ->orderBy('name')
+            ->get();
+
+        $byAchievement = [];
+        foreach ($ownedProducts as $product) {
+            foreach ($this->getAchievementsForUser($product, $user) as $row) {
+                $id = $row['id'];
+                if (! isset($byAchievement[$id]) || ($row['unlocked'] && ! ($byAchievement[$id]['unlocked'] ?? false))) {
+                    $byAchievement[$id] = array_merge($row, ['product_name' => $product->name]);
+                }
+            }
+        }
+
+        return array_values($byAchievement);
     }
 }

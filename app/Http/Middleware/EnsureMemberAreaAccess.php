@@ -21,13 +21,7 @@ class EnsureMemberAreaAccess
                 return redirect()->to('/login')->with('error', 'Faça login para acessar a área de membros.');
             }
 
-            $slug = $request->route('slug') ?? $request->attributes->get('member_area_slug');
-            if ($slug) {
-                return redirect()->route('member-area.login', ['slug' => $slug])
-                    ->with('error', 'Faça login para acessar a área de membros.');
-            }
-
-            return redirect()->route('login')->with('error', 'Faça login para acessar.');
+            return redirect()->route('login')->with('error', 'Faça login para acessar a área de membros.');
         }
 
         $product = $request->route('product') ?? $request->attributes->get('member_area_product');

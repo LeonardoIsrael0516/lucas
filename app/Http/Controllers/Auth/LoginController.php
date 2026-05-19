@@ -3,10 +3,11 @@
 namespace App\Http\Controllers\Auth;
 
 use App\Http\Controllers\Controller;
+use App\Models\Setting;
 use App\Models\User;
 use App\Models\TeamAuditLog;
-use App\Services\MemberAreaResolver;
 use App\Support\DockerSetupState;
+use App\Support\SchoolLoginSettings;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -16,8 +17,7 @@ use Inertia\Response;
 class LoginController extends Controller
 {
     /**
-     * Exibe o login da plataforma ou, se o host for de área de membros (subdomínio/domínio próprio),
-     * delega para o login da área de membros do produto.
+     * Tela de login única da escola (configuração global em Configurações).
      */
     public function showLoginForm(Request $request): Response|RedirectResponse
     {
@@ -29,18 +29,6 @@ class LoginController extends Controller
             return redirect()->route('criar-admin');
         }
 
-        $resolved = app(MemberAreaResolver::class)->resolve($request);
-        if ($resolved && in_array($resolved['access_type'], ['subdomain', 'custom'], true)) {
-            $request->attributes->set('member_area_product', $resolved['product']);
-            $request->attributes->set('member_area_access_type', $resolved['access_type']);
-            $request->attributes->set('member_area_slug', $resolved['slug']);
-
-            return app()->call(\App\Http\Controllers\MemberAreaLoginController::class.'@showLoginForm', [
-                'request' => $request,
-                'slug' => $resolved['slug'],
-            ]);
-        }
-
         return Inertia::render('Auth/Login');
     }
 
@@ -48,18 +36,6 @@ class LoginController extends Controller
     {
         if (DockerSetupState::isDocker() && ! DockerSetupState::isSetupDone()) {
             return redirect('/docker-setup');
-        }
-
-        $resolved = app(MemberAreaResolver::class)->resolve($request);
-        if ($resolved && in_array($resolved['access_type'], ['subdomain', 'custom'], true)) {
-            $request->attributes->set('member_area_product', $resolved['product']);
-            $request->attributes->set('member_area_access_type', $resolved['access_type']);
-            $request->attributes->set('member_area_slug', $resolved['slug']);
-
-            return app()->call(\App\Http\Controllers\MemberAreaLoginController::class.'@login', [
-                'request' => $request,
-                'slug' => $resolved['slug'],
-            ]);
         }
 
         $credentials = $request->validate([
@@ -95,6 +71,44 @@ class LoginController extends Controller
         ])->onlyInput('email');
     }
 
+    /**
+     * Login apenas com e-mail (quando habilitado nas configurações globais).
+     */
+    public function loginWithoutPassword(Request $request): RedirectResponse
+    {
+        if (DockerSetupState::isDocker() && ! DockerSetupState::isSetupDone()) {
+            return redirect('/docker-setup');
+        }
+
+        $tenantId = SchoolLoginSettings::resolveTenantId($request);
+        if ($tenantId === null) {
+            abort(503);
+        }
+
+        $enabled = Setting::get('login_without_password', '0', $tenantId);
+        if ($enabled !== '1' && $enabled !== 1 && $enabled !== true) {
+            return back()->withErrors(['email' => 'Login apenas com e-mail não está habilitado.'])->onlyInput('email');
+        }
+
+        $request->validate(['email' => ['required', 'email']]);
+
+        $user = User::where('email', $request->input('email'))->first();
+        if (! $user || $user->canAccessPanel()) {
+            return back()->withErrors(['email' => 'Credenciais inválidas.'])->onlyInput('email');
+        }
+        if (! $user->isAluno()) {
+            return back()->withErrors(['email' => 'Credenciais inválidas.'])->onlyInput('email');
+        }
+        if ((int) $user->tenant_id !== $tenantId) {
+            return back()->withErrors(['email' => 'Credenciais inválidas.'])->onlyInput('email');
+        }
+
+        Auth::login($user, $request->boolean('remember'));
+        $request->session()->regenerate();
+
+        return redirect()->intended('/area-membros');
+    }
+
     public function logout(Request $request)
     {
         $user = Auth::user();
@@ -116,7 +130,7 @@ class LoginController extends Controller
         $request->session()->regenerateToken();
 
         $to = $request->query('redirect');
-        if (is_string($to) && $this->isSafeMemberAreaLoginRedirect($to)) {
+        if (is_string($to) && $this->isSafeLoginRedirect($to)) {
             return redirect($to);
         }
 
@@ -124,9 +138,9 @@ class LoginController extends Controller
     }
 
     /**
-     * Evita open redirect: só paths de login da área de membros (/m/{slug}/login ou /login em host dedicado).
+     * Evita open redirect: só paths internos de login.
      */
-    private function isSafeMemberAreaLoginRedirect(string $path): bool
+    private function isSafeLoginRedirect(string $path): bool
     {
         if ($path === '' || ! str_starts_with($path, '/') || str_starts_with($path, '//')) {
             return false;
@@ -135,7 +149,6 @@ class LoginController extends Controller
             return false;
         }
 
-        return (bool) preg_match('#^/m/[a-zA-Z0-9]{6,16}/login$#', $path)
-            || $path === '/login';
+        return $path === '/login';
     }
 }

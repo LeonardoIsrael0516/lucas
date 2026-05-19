@@ -244,7 +244,7 @@ onUnmounted(() => {
                     Salvar PDF A3
                 </button>
             </template>
-            <Link :href="`/m/${slug}`" class="rounded-xl border-2 px-5 py-2.5 text-sm font-medium transition hover:opacity-90" style="border-color: var(--ma-primary); color: var(--ma-primary)">
+            <Link :href="`/m/${slug}/modulos`" class="rounded-xl border-2 px-5 py-2.5 text-sm font-medium transition hover:opacity-90" style="border-color: var(--ma-primary); color: var(--ma-primary)">
                 Voltar à área de membros
             </Link>
         </div>

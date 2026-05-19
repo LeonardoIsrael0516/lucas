@@ -19,6 +19,7 @@ use App\Models\MemberPushSubscription;
 use Illuminate\Support\Facades\Hash;
 use App\Services\MemberAreaResolver;
 use App\Services\MemberCommentService;
+use App\Services\ProductAccessService;
 use App\Services\StorageService;
 use App\Services\GamificationService;
 use App\Services\MemberProgressService;
@@ -131,8 +132,8 @@ class MemberBuilderController extends Controller
         $produto->refresh();
         $produto->load([
             'memberAreaDomain',
-            'memberSections.modules.lessons',
-            'memberSections.modules.relatedProduct',
+            'memberModules.lessons',
+            'memberModules.relatedProduct',
             'memberInternalProducts.relatedProduct',
             'memberTurmas.users:id,name,email',
             'memberCommunityPages',
@@ -213,51 +214,7 @@ class MemberBuilderController extends Controller
                 'type' => $this->memberAreaDomainTypeForFront($produto->memberAreaDomain),
                 'value' => $this->memberAreaDomainValueForFront($produto->memberAreaDomain, $produto),
             ] : null,
-            'sections' => $produto->memberSections->map(fn (MemberSection $s) => [
-                'id' => $s->id,
-                'title' => $s->title,
-                'position' => $s->position,
-                'cover_mode' => $s->cover_mode ?? 'vertical',
-                'section_type' => $s->section_type ?? 'courses',
-                'modules' => $s->modules->map(function (MemberModule $m) {
-                    $base = [
-                        'id' => $m->id,
-                        'title' => $m->title,
-                        'position' => $m->position,
-                        'thumbnail' => $m->thumbnail,
-                        'show_title_on_cover' => $m->show_title_on_cover ?? true,
-                        'release_after_days' => $m->release_after_days,
-                        'release_at_date' => $m->release_at_date?->format('Y-m-d'),
-                        'lessons' => $m->lessons->map(fn (MemberLesson $l) => [
-                            'id' => $l->id,
-                            'title' => $l->title,
-                            'position' => $l->position,
-                            'type' => $l->type,
-                            'content_url' => $l->content_url,
-                            'link_title' => $l->link_title,
-                            'content_files' => $l->content_files,
-                            'release_after_days' => $l->release_after_days,
-                            'release_at_date' => $l->release_at_date?->format('Y-m-d'),
-                            'content_text' => \App\Support\HtmlSanitizer::sanitize($l->content_text),
-                            'duration_seconds' => $l->duration_seconds,
-                            'is_free' => $l->is_free,
-                            'watermark_enabled' => (bool) ($l->watermark_enabled ?? false),
-                        ])->values()->all(),
-                    ];
-                    $extra = array_filter([
-                        'related_product_id' => $m->related_product_id,
-                        'source_member_module_id' => $m->source_member_module_id,
-                        'access_type' => $m->access_type,
-                        'external_url' => $m->external_url,
-                        'related_product' => $m->relatedProduct ? [
-                            'id' => $m->relatedProduct->id,
-                            'name' => $m->relatedProduct->name,
-                            'image_url' => $m->relatedProduct->image ? app(StorageService::class)->url($m->relatedProduct->image) : null,
-                        ] : null,
-                    ]);
-                    return array_merge($base, $extra);
-                })->values()->all(),
-            ])->values()->all(),
+            'modules' => $produto->memberModules->map(fn (MemberModule $m) => $this->mapModuleForBuilder($m))->values()->all(),
             'internal_products' => $produto->memberInternalProducts->map(fn (MemberInternalProduct $ip) => [
                 'id' => $ip->id,
                 'related_product_id' => $ip->related_product_id,
@@ -281,7 +238,7 @@ class MemberBuilderController extends Controller
             'product_users' => $productUsers,
             'total_lessons' => $totalLessons,
             'student_progress' => $studentProgress,
-            'community_pages' => $produto->memberCommunityPages->map(fn (MemberCommunityPage $p) => [
+            '_legacy_community_pages' => $produto->memberCommunityPages->map(fn (MemberCommunityPage $p) => [
                 'id' => $p->id,
                 'title' => $p->title,
                 'icon' => $p->icon,
@@ -352,9 +309,6 @@ class MemberBuilderController extends Controller
 
         $validated = $request->validate([
             'member_area_config' => ['required', 'array'],
-            'member_area_config.login.password_mode' => ['nullable', 'string', 'in:auto,default'],
-            'member_area_config.login.default_password' => ['nullable', 'string', 'max:255'],
-            'member_area_config.login.login_without_password' => ['nullable', 'boolean'],
             'domain_type' => ['nullable', 'string', 'in:path,custom'],
             'domain_value' => ['nullable', 'string', 'max:255'],
         ]);
@@ -402,51 +356,24 @@ class MemberBuilderController extends Controller
         if (! is_array($incoming)) {
             $incoming = [];
         }
-        // Mesclar config atual com a enviada (preserva vapid_private que não vem do front)
-        $config = array_replace_recursive($produto->member_area_config ?? [], $incoming);
-        // sidebar.items: substituir por completo (array_replace_recursive mantém índices antigos ao remover itens)
-        if (isset($incoming['sidebar']['items']) && is_array($incoming['sidebar']['items'])) {
-            $config['sidebar'] = $config['sidebar'] ?? [];
-            $config['sidebar']['items'] = array_values($incoming['sidebar']['items']);
-        }
-        // gamification.achievements: substituir por completo
-        if (isset($incoming['gamification']['achievements']) && is_array($incoming['gamification']['achievements'])) {
-            $config['gamification'] = $config['gamification'] ?? ['enabled' => false, 'achievements' => []];
-            $config['gamification']['achievements'] = array_values($incoming['gamification']['achievements']);
-        }
-        $pwa = $config['pwa'] ?? [];
-        $vapidWarning = null;
-        if (! empty($pwa['push_enabled'])) {
-            if (empty($pwa['vapid_public'] ?? null) || empty($pwa['vapid_private'] ?? null)) {
-                try {
-                    $keys = VAPID::createVapidKeys();
-                    $config['pwa']['vapid_public'] = $keys['publicKey'];
-                    $config['pwa']['vapid_private'] = $keys['privateKey'];
-                } catch (\Throwable $e) {
-                    // Fallback: no Windows/XAMPP o openssl_pkey_new pode falhar por falta de openssl.cnf; gerar via CLI
-                    $keys = $this->createVapidKeysViaOpensslCli();
-                    if ($keys !== null) {
-                        $config['pwa']['vapid_public'] = $keys['publicKey'];
-                        $config['pwa']['vapid_private'] = $keys['privateKey'];
-                    } else {
-                        $existing = $produto->member_area_config['pwa'] ?? [];
-                        $config['pwa']['vapid_public'] = $config['pwa']['vapid_public'] ?? $existing['vapid_public'] ?? null;
-                        $config['pwa']['vapid_private'] = $existing['vapid_private'] ?? null;
-                        $vapidWarning = 'Configuração salva, mas não foi possível gerar chaves para notificações push. Verifique se a extensão OpenSSL do PHP está habilitada e suporta chaves EC (P-256), ou se o binário openssl está no PATH.';
-                    }
-                }
-            } else {
-                $config['pwa']['vapid_private'] = $produto->member_area_config['pwa']['vapid_private'] ?? $config['pwa']['vapid_private'];
-            }
+        // Member Builder: apenas comentários por produto; restante é global (Área do aluno).
+        $existing = $produto->member_area_config ?? [];
+        $config = [
+            'comments_enabled' => (bool) ($incoming['comments_enabled'] ?? $existing['comments_enabled'] ?? false),
+            'comments_require_approval' => (bool) ($incoming['comments_require_approval'] ?? $existing['comments_require_approval'] ?? true),
+        ];
+        if (isset($existing['certificate']['completion_percent'])) {
+            $config['certificate'] = ['completion_percent' => (int) $existing['certificate']['completion_percent']];
         }
         $produto->update(['member_area_config' => $config]);
+        $vapidWarning = null;
 
         \Illuminate\Support\Facades\Log::info('MemberBuilder updateConfig', [
             'product_id' => $produto->id,
             'updated' => true,
         ]);
 
-        if ($domainType !== null) {
+        if ($domainType !== null && $domainType !== '') {
             $value = $domainType === 'path'
                 ? (trim((string) ($domainValue ?? '')) !== '' ? strtolower(trim($domainValue)) : $produto->checkout_slug)
                 : $domainValue;
@@ -603,18 +530,23 @@ class MemberBuilderController extends Controller
     }
 
     // Modules
-    public function storeModule(Request $request, Product $produto, MemberSection $section): JsonResponse|RedirectResponse
+    public function storeModule(Request $request, Product $produto): JsonResponse|RedirectResponse
     {
         $this->authorizeProduct($produto);
-        if ($section->product_id !== $produto->id) {
-            abort(404);
+        $moduleKind = $request->input('module_kind', 'courses');
+        if ($moduleKind === 'products' || $request->filled('related_product_id')) {
+            $moduleKind = 'products';
+        } elseif ($moduleKind === 'external_links' || $request->filled('external_url')) {
+            $moduleKind = 'external_links';
+        } else {
+            $moduleKind = 'courses';
         }
-        $sectionType = $section->section_type ?? 'courses';
         $createdModules = null;
 
-        if ($sectionType === 'courses') {
+        if ($moduleKind === 'courses') {
             $validated = $request->validate([
                 'title' => ['required', 'string', 'max:255'],
+                'cover_mode' => ['nullable', 'string', 'in:vertical,horizontal'],
                 'show_title_on_cover' => ['nullable', 'boolean'],
                 'release_after_days' => ['nullable', 'integer', 'min:1', 'max:3650'],
                 'release_at_date' => ['nullable', 'date_format:Y-m-d'],
@@ -627,17 +559,18 @@ class MemberBuilderController extends Controller
             } else {
                 $validated['release_at_date'] = null;
             }
-            $max = MemberModule::where('member_section_id', $section->id)->max('position') ?? 0;
+            $max = MemberModule::where('product_id', $produto->id)->max('position') ?? 0;
             $module = MemberModule::create([
-                'member_section_id' => $section->id,
+                'member_section_id' => null,
                 'product_id' => $produto->id,
                 'title' => $validated['title'],
                 'position' => $max + 1,
+                'cover_mode' => $validated['cover_mode'] ?? 'vertical',
                 'show_title_on_cover' => $validated['show_title_on_cover'] ?? true,
                 'release_after_days' => $validated['release_after_days'] ?? null,
                 'release_at_date' => $validated['release_at_date'] ?? null,
             ]);
-        } elseif ($sectionType === 'products') {
+        } elseif ($moduleKind === 'products') {
             $validated = $request->validate([
                 'title' => ['required', 'string', 'max:255'],
                 'related_product_id' => ['required', 'exists:products,id'],
@@ -655,56 +588,55 @@ class MemberBuilderController extends Controller
                 }
                 return back()->with('error', 'Não é possível referenciar o próprio produto.');
             }
-            $max = MemberModule::where('member_section_id', $section->id)->max('position') ?? 0;
+            $max = MemberModule::where('product_id', $produto->id)->max('position') ?? 0;
             $module = null;
             $createdModules = [];
 
             if ($related->type === Product::TYPE_AREA_MEMBROS) {
-                $sourceSections = $related->memberSections()
-                    ->where('section_type', 'courses')
+                $sourceModules = $related->memberModules()
+                    ->whereNull('related_product_id')
+                    ->whereNull('external_url')
                     ->orderBy('position')
-                    ->with(['modules' => fn ($q) => $q->orderBy('position')])
                     ->get();
-                $existingSourceIds = MemberModule::where('member_section_id', $section->id)
+                $existingSourceIds = MemberModule::where('product_id', $produto->id)
                     ->whereNotNull('source_member_module_id')
                     ->pluck('source_member_module_id')
                     ->flip()
                     ->all();
                 $position = $max;
-                foreach ($sourceSections as $sourceSection) {
-                    foreach ($sourceSection->modules as $sourceMod) {
-                        if (isset($existingSourceIds[$sourceMod->id])) {
-                            continue;
-                        }
-                        $position++;
-                        $createdModules[] = MemberModule::create([
-                            'member_section_id' => $section->id,
-                            'product_id' => $produto->id,
-                            'title' => $sourceMod->title !== '' ? $sourceMod->title : $validated['title'],
-                            'position' => $position,
-                            'related_product_id' => $validated['related_product_id'],
-                            'source_member_module_id' => $sourceMod->id,
-                            'access_type' => $validated['access_type'],
-                            'thumbnail' => $validated['thumbnail'] ?? $sourceMod->thumbnail,
-                            'show_title_on_cover' => $validated['show_title_on_cover'] ?? true,
-                        ]);
-                        $existingSourceIds[$sourceMod->id] = true;
+                foreach ($sourceModules as $sourceMod) {
+                    if (isset($existingSourceIds[$sourceMod->id])) {
+                        continue;
                     }
+                    $position++;
+                    $createdModules[] = MemberModule::create([
+                        'member_section_id' => null,
+                        'product_id' => $produto->id,
+                        'title' => $sourceMod->title !== '' ? $sourceMod->title : $validated['title'],
+                        'position' => $position,
+                        'related_product_id' => $validated['related_product_id'],
+                        'source_member_module_id' => $sourceMod->id,
+                        'access_type' => $validated['access_type'],
+                        'thumbnail' => $validated['thumbnail'] ?? $sourceMod->thumbnail,
+                        'cover_mode' => $sourceMod->cover_mode ?? 'vertical',
+                        'show_title_on_cover' => $validated['show_title_on_cover'] ?? true,
+                    ]);
+                    $existingSourceIds[$sourceMod->id] = true;
                 }
                 if ($createdModules !== []) {
                     $module = $createdModules[0];
-                } elseif ($sourceSections->sum(fn (MemberSection $s) => $s->modules->count()) > 0) {
+                } elseif ($sourceModules->count() > 0) {
                     if ($request->expectsJson()) {
-                        return response()->json(['message' => 'Todos os módulos deste produto já foram adicionados nesta seção.'], 422);
+                        return response()->json(['message' => 'Todos os módulos deste produto já foram adicionados.'], 422);
                     }
 
-                    return back()->with('error', 'Todos os módulos deste produto já foram adicionados nesta seção.');
+                    return back()->with('error', 'Todos os módulos deste produto já foram adicionados.');
                 }
             }
 
             if ($module === null) {
                 $module = MemberModule::create([
-                    'member_section_id' => $section->id,
+                    'member_section_id' => null,
                     'product_id' => $produto->id,
                     'title' => $validated['title'],
                     'position' => $max + 1,
@@ -723,14 +655,15 @@ class MemberBuilderController extends Controller
                 'thumbnail' => ['nullable', 'string', 'max:500'],
                 'show_title_on_cover' => ['nullable', 'boolean'],
             ]);
-            $max = MemberModule::where('member_section_id', $section->id)->max('position') ?? 0;
+            $max = MemberModule::where('product_id', $produto->id)->max('position') ?? 0;
             $module = MemberModule::create([
-                'member_section_id' => $section->id,
+                'member_section_id' => null,
                 'product_id' => $produto->id,
                 'title' => $validated['title'],
                 'position' => $max + 1,
                 'external_url' => $validated['external_url'],
                 'thumbnail' => $validated['thumbnail'] ?? null,
+                'cover_mode' => $validated['cover_mode'] ?? 'vertical',
                 'show_title_on_cover' => $validated['show_title_on_cover'] ?? true,
             ]);
         }
@@ -801,14 +734,14 @@ class MemberBuilderController extends Controller
         if ($module->product_id !== $produto->id) {
             abort(404);
         }
-        $section = $module->section;
-        $sectionType = $section->section_type ?? 'courses';
+        $sectionType = $this->moduleKind($module);
 
         if ($sectionType === 'courses') {
             $validated = $request->validate([
                 'title' => ['sometimes', 'string', 'max:255'],
                 'position' => ['sometimes', 'integer', 'min:0'],
                 'thumbnail' => ['nullable', 'string', 'max:500'],
+                'cover_mode' => ['sometimes', 'string', 'in:vertical,horizontal'],
                 'show_title_on_cover' => ['sometimes', 'boolean'],
                 'release_after_days' => ['nullable', 'integer', 'min:1', 'max:3650'],
                 'release_at_date' => ['nullable', 'date_format:Y-m-d'],
@@ -1023,7 +956,7 @@ class MemberBuilderController extends Controller
         }
 
         $module->loadMissing('lessons');
-        $max = MemberModule::where('member_section_id', $module->member_section_id)->max('position') ?? 0;
+        $max = MemberModule::where('product_id', $produto->id)->max('position') ?? 0;
         $storage = app(StorageService::class);
 
         $thumb = $module->thumbnail;
@@ -1035,11 +968,12 @@ class MemberBuilderController extends Controller
         }
 
         $newModule = MemberModule::create([
-            'member_section_id' => $module->member_section_id,
+            'member_section_id' => null,
             'product_id' => $produto->id,
             'title' => ($module->title ?? 'Módulo').' (cópia)',
             'position' => $max + 1,
             'thumbnail' => $thumb,
+            'cover_mode' => $module->cover_mode ?? 'vertical',
             'show_title_on_cover' => $module->show_title_on_cover ?? true,
             'release_after_days' => $module->release_after_days,
             'release_at_date' => $module->release_at_date,
@@ -1311,13 +1245,6 @@ class MemberBuilderController extends Controller
         $existing = User::query()->whereRaw('LOWER(email) = ?', [$emailNormalized])->first();
 
         if ($existing) {
-            if ((int) $existing->tenant_id !== (int) $produto->tenant_id) {
-                $msg = 'Este e-mail já está cadastrado em outra conta. Use outro e-mail.';
-                if ($request->expectsJson()) {
-                    return response()->json(['message' => $msg, 'errors' => ['email' => [$msg]]], 422);
-                }
-                return back()->with('error', $msg);
-            }
             if (! $existing->isAluno()) {
                 $msg = 'Este e-mail pertence a um usuário da equipe ou administrador. Use outro e-mail para alunos.';
                 if ($request->expectsJson()) {
@@ -1326,8 +1253,23 @@ class MemberBuilderController extends Controller
                 return back()->with('error', $msg);
             }
 
+            if ((int) $existing->tenant_id !== (int) $produto->tenant_id) {
+                $hasTenantProduct = $existing->products()->where('products.tenant_id', $produto->tenant_id)->exists();
+                if (! $hasTenantProduct) {
+                    $msg = 'Este e-mail já está cadastrado em outra conta. Use outro e-mail.';
+                    if ($request->expectsJson()) {
+                        return response()->json(['message' => $msg, 'errors' => ['email' => [$msg]]], 422);
+                    }
+
+                    return back()->with('error', $msg);
+                }
+                if ($existing->tenant_id === null) {
+                    $existing->update(['tenant_id' => $produto->tenant_id]);
+                }
+            }
+
             $existing->update(['name' => $validated['name']]);
-            $produto->users()->syncWithoutDetaching([$existing->id]);
+            app(ProductAccessService::class)->grant($existing, $produto);
             if ($turmaId) {
                 MemberTurma::find($turmaId)->users()->syncWithoutDetaching([$existing->id]);
             }
@@ -1358,7 +1300,7 @@ class MemberBuilderController extends Controller
             'role' => User::ROLE_ALUNO,
             'tenant_id' => $produto->tenant_id,
         ]);
-        $produto->users()->attach($user->id);
+        app(ProductAccessService::class)->grant($user, $produto);
         if ($turmaId) {
             MemberTurma::find($turmaId)->users()->syncWithoutDetaching([$user->id]);
         }
@@ -1746,5 +1688,61 @@ class MemberBuilderController extends Controller
         } catch (\Throwable) {
             return null;
         }
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function mapModuleForBuilder(MemberModule $m): array
+    {
+        $base = [
+            'id' => $m->id,
+            'title' => $m->title,
+            'position' => $m->position,
+            'thumbnail' => $m->thumbnail,
+            'cover_mode' => $m->cover_mode ?? 'vertical',
+            'show_title_on_cover' => $m->show_title_on_cover ?? true,
+            'release_after_days' => $m->release_after_days,
+            'release_at_date' => $m->release_at_date?->format('Y-m-d'),
+            'lessons' => $m->lessons->map(fn (MemberLesson $l) => [
+                'id' => $l->id,
+                'title' => $l->title,
+                'position' => $l->position,
+                'type' => $l->type,
+                'content_url' => $l->content_url,
+                'link_title' => $l->link_title,
+                'content_files' => $l->content_files,
+                'release_after_days' => $l->release_after_days,
+                'release_at_date' => $l->release_at_date?->format('Y-m-d'),
+                'content_text' => \App\Support\HtmlSanitizer::sanitize($l->content_text),
+                'duration_seconds' => $l->duration_seconds,
+                'is_free' => $l->is_free,
+                'watermark_enabled' => (bool) ($l->watermark_enabled ?? false),
+            ])->values()->all(),
+        ];
+
+        return array_merge($base, array_filter([
+            'related_product_id' => $m->related_product_id,
+            'source_member_module_id' => $m->source_member_module_id,
+            'access_type' => $m->access_type,
+            'external_url' => $m->external_url,
+            'related_product' => $m->relatedProduct ? [
+                'id' => $m->relatedProduct->id,
+                'name' => $m->relatedProduct->name,
+                'image_url' => $m->relatedProduct->image ? app(StorageService::class)->url($m->relatedProduct->image) : null,
+            ] : null,
+        ]));
+    }
+
+    private function moduleKind(MemberModule $module): string
+    {
+        if ($module->external_url) {
+            return 'external_links';
+        }
+        if ($module->related_product_id) {
+            return 'products';
+        }
+
+        return 'courses';
     }
 }

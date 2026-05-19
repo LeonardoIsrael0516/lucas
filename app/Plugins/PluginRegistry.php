@@ -284,6 +284,14 @@ class PluginRegistry
             ]);
         }
 
+        foreach ($result as &$item) {
+            if (($item['slug'] ?? null) === 'white-label') {
+                $item['is_enabled'] = true;
+                $item['is_native'] = true;
+            }
+        }
+        unset($item);
+
         return $result;
     }
 
@@ -432,6 +440,9 @@ class PluginRegistry
 
     public static function disable(string $slug): bool
     {
+        if (($slug = trim($slug)) === 'white-label') {
+            return false;
+        }
         if (! self::tableExists()) {
             return false;
         }
@@ -475,6 +486,9 @@ class PluginRegistry
      */
     public static function uninstall(string $slug, ?string $pluginPath = null): bool
     {
+        if (trim($slug) === 'white-label') {
+            return false;
+        }
         $pluginDir = $pluginPath !== null && $pluginPath !== ''
             ? realpath($pluginPath)
             : realpath(self::userInstallRoot().DIRECTORY_SEPARATOR.$slug);

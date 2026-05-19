@@ -8,6 +8,10 @@ $rates = [
 return [
     'currency_default' => env('PRODUCT_CURRENCY_DEFAULT', 'BRL'),
 
+    /** Capa recomendada para produtos tipo área de membros (checkout + hub do aluno). */
+    'course_cover_width' => 1060,
+    'course_cover_height' => 663,
+
     'rates' => $rates,
 
     'currencies' => [

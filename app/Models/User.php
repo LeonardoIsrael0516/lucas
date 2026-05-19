@@ -66,7 +66,9 @@ class User extends Authenticatable
 
     public function products(): \Illuminate\Database\Eloquent\Relations\BelongsToMany
     {
-        return $this->belongsToMany(Product::class, 'product_user')->withTimestamps();
+        return $this->belongsToMany(Product::class, 'product_user')
+            ->withTimestamps()
+            ->withPivot('access_expires_at');
     }
 
     public function subscriptions(): \Illuminate\Database\Eloquent\Relations\HasMany

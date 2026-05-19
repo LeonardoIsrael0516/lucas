@@ -7,7 +7,7 @@ const props = defineProps({
     mode: { type: String, default: 'area' },
     config: { type: Object, default: () => ({}) },
     productName: { type: String, default: '' },
-    // Dados iguais aos da área real (Show.vue) — só exibe o que a área real exibe
+    // Dados iguais aos da área real do curso (hub de módulos / entrada) — só exibe o que a área real exibe
     sections: { type: Array, default: () => [] },
     internal_products: { type: Array, default: () => [] },
     progress_percent: { type: Number, default: 0 },
@@ -26,8 +26,6 @@ const heroMobileBg = computed(() => hero.value?.image_url_mobile || hero.value?.
 const heroGradient = 'linear-gradient(135deg, var(--ma-primary) 0%, #27272a 100%)';
 const headerLogo = computed(() => props.config?.header?.logo_url ?? null);
 const sidebar = computed(() => props.config?.sidebar ?? {});
-const login = computed(() => props.config?.login ?? {});
-
 const sidebarItems = computed(() => sidebar.value?.items ?? [
     { title: 'Início', icon: 'home', link: '/', open_external: false },
 ]);
@@ -145,7 +143,7 @@ const certOverlayOpacity = computed(() => {
                                 </div>
                             </section>
 
-                            <!-- Módulos por seção — igual Show.vue, só aparece se houver sections -->
+                            <!-- Módulos por seção — igual à listagem da área, só aparece se houver sections -->
                             <section v-for="section in sections" :key="section.id" class="space-y-4">
                                 <h2 class="text-xl font-semibold">{{ section.title }}</h2>
                                 <div class="flex gap-4 overflow-x-auto pb-2">
@@ -321,68 +319,6 @@ const certOverlayOpacity = computed(() => {
                                 <p class="text-sm" style="opacity: 0.85">Plataforma de Cursos</p>
                             </div>
                         </div>
-                    </div>
-                </div>
-            </div>
-        </template>
-
-        <!-- Login — preview idêntico à tela real (MemberAreaApp/Login.vue) -->
-        <template v-else-if="mode === 'login'">
-            <div
-                class="relative flex min-h-full h-full w-full flex-col items-center justify-center bg-cover bg-center px-4 py-12"
-                :style="{
-                    '--ma-primary': login.primary_color || '#0ea5e9',
-                    backgroundColor: login.background_color || '#18181b',
-                    backgroundImage: login.background_image ? `url(${login.background_image})` : 'none',
-                }"
-            >
-                <div v-if="login.background_image" class="pointer-events-none absolute inset-0 bg-black/50" aria-hidden="true" />
-                <div class="relative z-10 w-full max-w-md rounded-2xl border border-white/10 bg-zinc-900/90 p-8 shadow-2xl backdrop-blur-sm">
-                    <div class="flex flex-col items-center text-center">
-                        <img
-                            v-if="login.logo"
-                            :src="login.logo"
-                            :alt="login.title || 'Logo'"
-                            class="mb-6 h-12 w-auto max-w-[200px] object-contain object-center"
-                        />
-                        <h1 class="text-2xl font-bold text-white">{{ login.title || 'Área de Membros' }}</h1>
-                        <p class="mt-1 text-zinc-400">{{ login.subtitle || 'Entre com seu e-mail e senha' }}</p>
-                    </div>
-                    <div class="mt-8 space-y-4">
-                        <div>
-                            <label class="mb-1 block text-sm font-medium text-zinc-300">E-mail</label>
-                            <div class="h-12 rounded-xl border border-zinc-600 bg-zinc-800/80" />
-                        </div>
-                        <div>
-                            <label class="mb-1 block text-sm font-medium text-zinc-300">Senha</label>
-                            <div class="relative h-12 rounded-xl border border-zinc-600 bg-zinc-800/80">
-                                <span class="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-400">
-                                    <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
-                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
-                                    </svg>
-                                </span>
-                            </div>
-                        </div>
-                        <div class="flex items-center gap-2">
-                            <div class="h-4 w-4 rounded border border-zinc-600 bg-zinc-800/80" />
-                            <span class="text-sm text-zinc-400">Lembrar de mim</span>
-                        </div>
-                        <button
-                            type="button"
-                            disabled
-                            class="flex h-12 w-full items-center justify-center rounded-xl font-semibold text-white"
-                            :style="{ backgroundColor: login.primary_color || '#0ea5e9' }"
-                        >
-                            Entrar
-                        </button>
-                        <div class="mt-3 flex w-full items-center justify-center gap-2 rounded-xl border border-white/30 bg-white/10 py-3 text-sm font-medium text-white/90 backdrop-blur-sm">
-                            <svg class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z" />
-                            </svg>
-                            Instalar App
-                        </div>
-                        <p class="mt-2 text-center text-xs text-zinc-500">(Visível apenas em mobile, se o app não estiver instalado)</p>
                     </div>
                 </div>
             </div>

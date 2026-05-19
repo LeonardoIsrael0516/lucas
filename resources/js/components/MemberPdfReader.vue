@@ -1,11 +1,40 @@
 <script setup>
-import { ref, shallowRef, watch, onMounted, onUnmounted, computed, nextTick } from 'vue';
+import { ref, shallowRef, watch, onMounted, onUnmounted, computed, nextTick, defineExpose } from 'vue';
 import * as pdfjsLib from 'pdfjs-dist';
-import pdfWorkerSrc from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
+import PdfJsWorker from 'pdfjs-dist/build/pdf.worker.min.mjs?worker';
+import PdfJsWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import axios from 'axios';
-import { Heart, Download, ZoomIn, ZoomOut, Highlighter, Maximize2, Minimize2 } from 'lucide-vue-next';
+import { Heart, ZoomIn, ZoomOut, Highlighter, Maximize2, Minimize2 } from 'lucide-vue-next';
 
-pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerSrc;
+let pdfWorkerAvailable = !import.meta.env.DEV;
+pdfjsLib.GlobalWorkerOptions.workerSrc = PdfJsWorkerUrl;
+if (!pdfWorkerAvailable) {
+    // In local dev, app and Vite frequently use different origins (.test vs :5173).
+    // Force main-thread rendering to avoid worker bootstrap/CORS failures.
+    pdfjsLib.GlobalWorkerOptions.workerPort = null;
+} else {
+    try {
+        pdfjsLib.GlobalWorkerOptions.workerPort = new PdfJsWorker();
+    } catch (error) {
+        console.warn('[pdfjs] Worker could not be initialized; using fallback.', error);
+        pdfjsLib.GlobalWorkerOptions.workerPort = null;
+        pdfWorkerAvailable = false;
+    }
+}
+
+function isWorkerBootstrapError(error) {
+    const msg = (error?.message || error || '').toString();
+    return msg.includes('GlobalWorkerOptions.workerSrc') || msg.includes('Failed to construct \'Worker\'');
+}
+
+async function loadPdfDoc(url, forceMainThread = false) {
+    const task = pdfjsLib.getDocument({
+        url,
+        withCredentials: false,
+        disableWorker: forceMainThread || !pdfWorkerAvailable,
+    });
+    return task.promise;
+}
 
 const props = defineProps({
     files: { type: Array, required: true },
@@ -18,9 +47,11 @@ const props = defineProps({
 const emit = defineEmits(['last-page-reached']);
 
 const canvasRef = ref(null);
+const nextPeekCanvasRef = ref(null);
 const canvasHostRef = ref(null);
 const fullscreenRootRef = ref(null);
 const thumbsScrollRef = ref(null);
+const fsNavScrollRef = ref(null);
 
 const loading = ref(true);
 const error = ref('');
@@ -57,6 +88,14 @@ let renderTask = null;
 let resizeObserver = null;
 let resizeObservedEl = null;
 
+const WHEEL_LISTENER_OPTS = { passive: false };
+let wheelHostEl = null;
+let pageFlipCooldown = 0;
+const PAGE_FLIP_COOLDOWN_MS = 350;
+const isDesktopViewport = ref(true);
+const fullscreenNavVisible = ref(false);
+let fullscreenNavTimer = null;
+
 function showToast(msg) {
     toastMessage.value = msg;
     if (toastTimer) clearTimeout(toastTimer);
@@ -64,6 +103,20 @@ function showToast(msg) {
         toastMessage.value = '';
         toastTimer = null;
     }, 3200);
+}
+
+function updateViewportFlags() {
+    isDesktopViewport.value = typeof window !== 'undefined' ? window.innerWidth >= 768 : true;
+}
+
+function revealFullscreenNav() {
+    if (!isFullscreen.value || !isDesktopViewport.value) return;
+    fullscreenNavVisible.value = true;
+    if (fullscreenNavTimer) clearTimeout(fullscreenNavTimer);
+    fullscreenNavTimer = setTimeout(() => {
+        fullscreenNavVisible.value = false;
+        fullscreenNavTimer = null;
+    }, 3000);
 }
 
 function apiPrefix() {
@@ -85,6 +138,7 @@ function globalToLocal(globalOneBased) {
 }
 
 const currentLocal = computed(() => globalToLocal(globalPage.value));
+const hasNextPage = computed(() => globalPage.value < totalPages.value);
 
 const currentPageHighlights = computed(() => {
     const { fileIndex, pageNum } = currentLocal.value;
@@ -154,7 +208,9 @@ async function renderCurrentPage() {
     const baseViewport = page.getViewport({ scale: 1 });
     const cw = Math.max(80, host.clientWidth - 16);
     const ch = Math.max(80, host.clientHeight - 16);
-    const fit = Math.min(cw / baseViewport.width, ch / baseViewport.height, 8) * zoomMul.value;
+    const fitWhole = Math.min(cw / baseViewport.width, ch / baseViewport.height, 8);
+    const fitWidth = Math.min(cw / baseViewport.width, 8);
+    const fit = isFullscreen.value ? fitWhole : fitWidth * zoomMul.value;
     const viewport = page.getViewport({ scale: fit * outputScale });
 
     const ctx = canvas.getContext('2d');
@@ -177,6 +233,25 @@ async function renderCurrentPage() {
         if (e?.name !== 'RenderingCancelledException') console.warn(e);
     }
     renderTask = null;
+    void renderNextPeek();
+}
+
+async function renderNextPeek() {
+    const canvas = nextPeekCanvasRef.value;
+    if (!canvas) return;
+    if (!hasNextPage.value || !pdfDocs.value.length) {
+        canvas.width = 1;
+        canvas.height = 1;
+        return;
+    }
+    const { doc, pageNum } = globalToLocal(globalPage.value + 1);
+    if (!doc) return;
+    const page = await doc.getPage(pageNum);
+    const vp = page.getViewport({ scale: 0.2 });
+    const ctx = canvas.getContext('2d');
+    canvas.width = vp.width;
+    canvas.height = vp.height;
+    await page.render({ canvasContext: ctx, viewport: vp }).promise;
 }
 
 async function destroyDocs() {
@@ -207,8 +282,16 @@ async function loadDocuments() {
         const docs = [];
         let pages = 0;
         for (const { url } of list) {
-            const loadingTask = pdfjsLib.getDocument({ url, withCredentials: false });
-            const pdf = await loadingTask.promise;
+            let pdf;
+            try {
+                pdf = await loadPdfDoc(url);
+            } catch (firstError) {
+                if (!isWorkerBootstrapError(firstError)) throw firstError;
+                // Dev fallback: force load without worker when browser blocks cross-origin worker bootstrap.
+                pdfWorkerAvailable = false;
+                pdfjsLib.GlobalWorkerOptions.workerPort = null;
+                pdf = await loadPdfDoc(url, true);
+            }
             docs.push(pdf);
             pages += pdf.numPages;
         }
@@ -230,6 +313,7 @@ async function loadDocuments() {
 }
 
 const thumbCanvases = ref({});
+const fsThumbCanvases = ref({});
 
 function setThumbRef(pg, el) {
     if (el) {
@@ -239,30 +323,42 @@ function setThumbRef(pg, el) {
     }
 }
 
+function setFsThumbRef(pg, el) {
+    if (el) {
+        fsThumbCanvases.value[pg] = el;
+    } else {
+        delete fsThumbCanvases.value[pg];
+    }
+}
+
 async function renderVisibleThumbs() {
     await nextTick();
     for (let pg = 1; pg <= totalPages.value; pg++) {
         const { doc, pageNum } = globalToLocal(pg);
         if (!doc) continue;
-        const canvas = thumbCanvases.value[pg];
-        if (!canvas) continue;
+        const canvases = [thumbCanvases.value[pg], fsThumbCanvases.value[pg]].filter(Boolean);
+        if (!canvases.length) continue;
         const page = await doc.getPage(pageNum);
         const vp = page.getViewport({ scale: 0.18 });
-        const ctx = canvas.getContext('2d');
-        canvas.width = vp.width;
-        canvas.height = vp.height;
-        await page.render({ canvasContext: ctx, viewport: vp }).promise;
+        for (const canvas of canvases) {
+            const ctx = canvas.getContext('2d');
+            canvas.width = vp.width;
+            canvas.height = vp.height;
+            await page.render({ canvasContext: ctx, viewport: vp }).promise;
+        }
     }
 }
 
 function prevPage() {
     if (globalPage.value <= 1) return;
     globalPage.value -= 1;
+    if (canvasHostRef.value) canvasHostRef.value.scrollTop = 0;
 }
 
 function nextPage() {
     if (globalPage.value >= totalPages.value) return;
     globalPage.value += 1;
+    if (canvasHostRef.value) canvasHostRef.value.scrollTop = 0;
 }
 
 function zoomIn() {
@@ -287,12 +383,67 @@ async function toggleFullscreen() {
     } catch (_) {}
 }
 
+function onWheelPageFlip(e) {
+    const el = canvasHostRef.value;
+    if (!el) return;
+    if (Math.abs(e.deltaY) < 6) return;
+    const atTop = el.scrollTop <= 0;
+    const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 1;
+    const now = Date.now();
+    if (now < pageFlipCooldown) {
+        if ((e.deltaY > 0 && atBottom) || (e.deltaY < 0 && atTop)) e.preventDefault();
+        return;
+    }
+    if (e.deltaY > 0 && atBottom && globalPage.value < totalPages.value) {
+        e.preventDefault();
+        pageFlipCooldown = now + PAGE_FLIP_COOLDOWN_MS;
+        nextPage();
+    } else if (e.deltaY < 0 && atTop && globalPage.value > 1) {
+        e.preventDefault();
+        pageFlipCooldown = now + PAGE_FLIP_COOLDOWN_MS;
+        prevPage();
+    }
+}
+
+function bindWheelHost() {
+    if (wheelHostEl) {
+        wheelHostEl.removeEventListener('wheel', onWheelPageFlip, WHEEL_LISTENER_OPTS);
+        wheelHostEl = null;
+    }
+    const host = canvasHostRef.value;
+    if (host) {
+        host.addEventListener('wheel', onWheelPageFlip, WHEEL_LISTENER_OPTS);
+        wheelHostEl = host;
+    }
+}
+
+function unbindWheelHost() {
+    if (wheelHostEl) {
+        wheelHostEl.removeEventListener('wheel', onWheelPageFlip, WHEEL_LISTENER_OPTS);
+        wheelHostEl = null;
+    }
+}
+
 function onFullscreenChange() {
-    isFullscreen.value = !!document.fullscreenElement;
+    const nowFs = !!document.fullscreenElement;
+    const entering = nowFs && !isFullscreen.value;
+    isFullscreen.value = nowFs;
+    if (entering && canvasHostRef.value) {
+        canvasHostRef.value.scrollTop = 0;
+        revealFullscreenNav();
+    }
+    if (!nowFs) {
+        fullscreenNavVisible.value = false;
+        if (fullscreenNavTimer) {
+            clearTimeout(fullscreenNavTimer);
+            fullscreenNavTimer = null;
+        }
+    }
     void nextTick().then(() => renderCurrentPage());
 }
 
 function onResize() {
+    updateViewportFlags();
     void renderCurrentPage();
 }
 
@@ -311,6 +462,16 @@ function onKeyDown(e) {
 function goToGlobalPage(g) {
     if (g < 1 || g > totalPages.value) return;
     globalPage.value = g;
+    if (canvasHostRef.value) canvasHostRef.value.scrollTop = 0;
+}
+
+function syncThumbsScroll() {
+    const selectors = [`[data-page="${globalPage.value}"]`];
+    for (const container of [thumbsScrollRef.value, fsNavScrollRef.value]) {
+        if (!container) continue;
+        const target = container.querySelector(selectors[0]);
+        if (target) target.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    }
 }
 
 function overlayPointerDown(e) {
@@ -410,6 +571,13 @@ function downloadPdf() {
     showToast('Download iniciado. Verifique sua pasta de downloads.');
 }
 
+const hasPdf = computed(() => pdfDocs.value.length > 0 && totalPages.value > 0 && !error.value);
+
+defineExpose({
+    downloadPdf,
+    hasPdf,
+});
+
 watch(
     () => props.files,
     () => void loadDocuments(),
@@ -417,6 +585,12 @@ watch(
 );
 
 watch(globalPage, async (newP, oldP) => {
+    if (canvasHostRef.value) {
+        canvasHostRef.value.scrollTop = 0;
+    }
+    if (isFullscreen.value) {
+        revealFullscreenNav();
+    }
     if (oldP !== undefined && oldP !== null && newP !== oldP) {
         const prevFi = globalToLocal(oldP).fileIndex;
         await saveFileIndexAnnotations(prevFi);
@@ -424,6 +598,7 @@ watch(globalPage, async (newP, oldP) => {
     await renderCurrentPage();
     await nextTick();
     void renderVisibleThumbs();
+    syncThumbsScroll();
     if (totalPages.value > 0 && newP === totalPages.value && oldP !== undefined && newP !== oldP) {
         emit('last-page-reached');
     }
@@ -441,6 +616,7 @@ onMounted(() => {
     document.addEventListener('fullscreenchange', onFullscreenChange);
     window.addEventListener('keydown', onKeyDown);
     window.addEventListener('resize', onResize);
+    updateViewportFlags();
     void loadDocuments();
     nextTick(() => {
         const host = canvasHostRef.value;
@@ -449,10 +625,12 @@ onMounted(() => {
             resizeObserver = new ResizeObserver(() => void renderCurrentPage());
             resizeObserver.observe(host);
         }
+        bindWheelHost();
     });
 });
 
 onUnmounted(() => {
+    unbindWheelHost();
     document.removeEventListener('fullscreenchange', onFullscreenChange);
     window.removeEventListener('keydown', onKeyDown);
     window.removeEventListener('resize', onResize);
@@ -465,6 +643,7 @@ onUnmounted(() => {
     resizeObservedEl = null;
     if (saveTimer) clearTimeout(saveTimer);
     if (toastTimer) clearTimeout(toastTimer);
+    if (fullscreenNavTimer) clearTimeout(fullscreenNavTimer);
     if (renderTask) {
         try {
             renderTask.cancel();
@@ -494,6 +673,21 @@ const selectionRectCss = computed(() => {
 
 const colorBtn = (c) =>
     highlightColor.value === c ? 'ring-2 ring-white ring-offset-2 ring-offset-zinc-900' : 'opacity-80 hover:opacity-100';
+const showFullscreenPageNav = computed(
+    () =>
+        isFullscreen.value &&
+        isDesktopViewport.value &&
+        fullscreenNavVisible.value &&
+        !loading.value &&
+        !error.value &&
+        totalPages.value > 0
+);
+
+watch(isDesktopViewport, (isDesktop) => {
+    if (!isDesktop) {
+        fullscreenNavVisible.value = false;
+    }
+});
 </script>
 
 <template>
@@ -561,16 +755,6 @@ const colorBtn = (c) =>
                     </button>
                     <button
                         type="button"
-                        class="rounded-md border border-zinc-600 px-2 py-1 text-xs text-zinc-100 hover:bg-zinc-800"
-                        @click="downloadPdf"
-                    >
-                        <span class="inline-flex items-center gap-1">
-                            <Download class="h-3.5 w-3.5" />
-                            Baixar PDF
-                        </span>
-                    </button>
-                    <button
-                        type="button"
                         class="ml-auto inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs font-medium transition"
                         :class="
                             userLikedLocal
@@ -616,9 +800,21 @@ const colorBtn = (c) =>
 
                 <div
                     ref="canvasHostRef"
-                    class="relative flex min-h-[50vh] w-full items-center justify-center overflow-auto p-3"
+                    :class="[
+                        'relative w-full overflow-auto bg-zinc-950/80',
+                        isFullscreen
+                            ? 'flex min-h-0 flex-1 items-center justify-center p-3'
+                            : 'flex aspect-video min-h-0 items-start justify-center p-3',
+                    ]"
                 >
-                    <div class="relative inline-block">
+                    <div
+                        v-if="isFullscreen && !loading && !error && totalPages > 0"
+                        class="pointer-events-none absolute left-4 top-4 z-[6] rounded-full border border-zinc-600 bg-zinc-900/85 px-3 py-1 text-sm font-semibold text-white shadow-lg"
+                    >
+                        Página {{ globalPage }} / {{ totalPages }}
+                    </div>
+
+                    <div class="relative mx-auto inline-block">
                         <canvas ref="canvasRef" class="max-w-full shadow-lg" />
                         <div
                             v-if="!loading && !error && totalPages > 0"
@@ -655,11 +851,48 @@ const colorBtn = (c) =>
                         </div>
                     </div>
 
+                    <aside
+                        v-if="showFullscreenPageNav"
+                        class="absolute right-4 top-4 z-[6] w-36 rounded-lg border border-zinc-600 bg-zinc-900/90 p-2 shadow-2xl"
+                    >
+                        <p class="mb-2 text-center text-[11px] font-medium text-zinc-300">Páginas</p>
+                        <div ref="fsNavScrollRef" class="max-h-[40vh] overflow-y-auto pr-1">
+                            <button
+                                v-for="pg in totalPages"
+                                :key="`fs-nav-${pg}`"
+                                :data-page="pg"
+                                type="button"
+                                class="mb-2 w-full rounded border p-1 text-xs text-zinc-100 transition"
+                                :class="
+                                    pg === globalPage
+                                        ? 'border-[var(--ma-primary,#0ea5e9)] bg-[var(--ma-primary,#0ea5e9)]/20 ring-1 ring-[var(--ma-primary,#0ea5e9)]'
+                                        : 'border-zinc-700 hover:border-zinc-500 hover:bg-zinc-800'
+                                "
+                                @click="goToGlobalPage(pg)"
+                            >
+                                <canvas :ref="(el) => setFsThumbRef(pg, el)" class="mx-auto block h-auto w-full rounded bg-white" />
+                                <span class="mt-1 block text-center text-[10px] text-zinc-400">{{ pg }}</span>
+                            </button>
+                        </div>
+                    </aside>
+
+                    <button
+                        v-if="isFullscreen && isDesktopViewport && hasNextPage && !loading && !error"
+                        type="button"
+                        class="absolute bottom-4 right-4 z-[6] w-32 rounded-lg border border-zinc-600 bg-zinc-900/90 p-1.5 text-left shadow-2xl transition hover:border-[var(--ma-primary,#0ea5e9)]"
+                        @click="nextPage"
+                    >
+                        <p class="mb-1 text-center text-[10px] font-medium text-zinc-300">Próxima</p>
+                        <div class="overflow-hidden rounded border border-zinc-700 bg-white/90">
+                            <canvas ref="nextPeekCanvasRef" class="block h-auto w-full" />
+                        </div>
+                    </button>
+
                     <div
                         v-if="loading"
                         class="absolute inset-0 z-[4] flex items-center justify-center bg-zinc-950/60 text-sm text-zinc-300"
                     >
-                        Carregando…
+                        Carregando...
                     </div>
                     <div
                         v-else-if="error"
@@ -681,6 +914,7 @@ const colorBtn = (c) =>
                     <button
                         v-for="pg in totalPages"
                         :key="pg"
+                        :data-page="pg"
                         type="button"
                         class="mb-2 w-full rounded-md border p-1 transition"
                         :class="

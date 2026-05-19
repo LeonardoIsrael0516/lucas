@@ -3,7 +3,6 @@ import { computed, inject } from 'vue';
 import { PanelsTopLeft, Bell } from 'lucide-vue-next';
 import { usePage } from '@inertiajs/vue3';
 import { useSidebar } from '@/composables/useSidebar';
-import ConquistasWidget from '@/components/layout/ConquistasWidget.vue';
 import ThemeToggler from '@/components/layout/ThemeToggler.vue';
 import UserMenu from '@/components/layout/UserMenu.vue';
 
@@ -48,7 +47,6 @@ const unreadBadge = computed(() => Math.max(0, notificationsUnreadCount?.value ?
             </template>
         </div>
         <div class="flex shrink-0 items-center gap-2">
-            <ConquistasWidget v-if="!isDashboard || !isMobile" />
             <ThemeToggler />
             <button
                 type="button"

@@ -247,10 +247,6 @@ async function saveNovoAluno() {
         showToast('Preencha nome e e-mail.', 'error');
         return;
     }
-    if (novoAlunoForm.value.password_mode === 'manual' && !novoAlunoForm.value.password) {
-        showToast('Preencha a senha (modo manual).', 'error');
-        return;
-    }
     savingNovo.value = true;
     try {
         const { data } = await axios.post('/produtos/alunos', {
@@ -711,6 +707,9 @@ onUnmounted(() => {
                                 class="w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-900 dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
                                 placeholder="Digite uma senha (mínimo 6 caracteres)"
                             />
+                            <p class="text-xs text-zinc-500 dark:text-zinc-400">
+                                Se o aluno já existir em outro curso seu, use o mesmo e-mail e deixe a senha em branco — o acesso aos produtos selecionados será atualizado.
+                            </p>
                         </div>
                         <div class="space-y-2">
                             <label class="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-left">

@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Services\StorageService;
+use App\Support\StudentAreaBranding;
 use App\Support\StudentAreaTenant;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -25,39 +26,27 @@ class ProfileController extends Controller
 
         $component = $user->isAluno() ? 'MemberArea/Profile' : 'Profile/Index';
         $tenantId = $user->tenant_id;
-        $communityHref = null;
+        $hubNav = null;
         $studentBranding = null;
         $notificationsUnread = 0;
         if ($user->isAluno()) {
-            // Community link: first product with community enabled.
             try {
-                $owned = $user->products()->orderBy('name')->get()->filter(fn ($p) => $p->type === \App\Models\Product::TYPE_AREA_MEMBROS);
-                foreach ($owned as $p) {
-                    $cfg = $p->member_area_config ?? [];
-                    if (! (bool) ($cfg['community_enabled'] ?? false)) continue;
-                    if (! $p->hasMemberAreaAccess($user)) continue;
-                    $base = rtrim(app(\App\Services\MemberAreaResolver::class)->baseUrlForProduct($p), '/');
-                    $communityHref = $base.'/comunidade';
-                    break;
+                if (! $tenantId) {
+                    $owned = $user->products()->orderBy('name')->get()->filter(fn ($p) => $p->type === \App\Models\Product::TYPE_AREA_MEMBROS);
+                    $tenantId = (int) ($owned->first()?->tenant_id ?? 0) ?: null;
                 }
+                $hubNav = [
+                    'community_enabled' => \App\Support\StudentAreaSettings::communityEnabled($tenantId),
+                    'certificate_enabled' => \App\Support\StudentAreaSettings::certificateEnabled($tenantId),
+                    'gamification_enabled' => \App\Support\StudentAreaSettings::gamificationEnabled($tenantId),
+                ];
             } catch (\Throwable) {}
 
             // Branding for student sidebar (same source as /area-membros).
             try {
-                if (! $tenantId) {
-                    $tenantId = (int) ($owned->first()?->tenant_id ?? 0) ?: null;
-                }
-                $studentBranding = [
-                    'primary' => (string) \App\Models\Setting::get('student_area_primary', '#0ea5e9', $tenantId),
-                    'logo_url' => null,
-                ];
-                $logoPath = (string) \App\Models\Setting::get('student_area_logo', '', $tenantId);
-                if ($logoPath !== '') {
-                    $storage = new \App\Services\StorageService($tenantId);
-                    $studentBranding['logo_url'] = $storage->exists($logoPath) ? $storage->url($logoPath) : null;
-                }
+                $studentBranding = StudentAreaBranding::forTenant($tenantId);
             } catch (\Throwable) {
-                $studentBranding = ['primary' => '#0ea5e9', 'logo_url' => null];
+                $studentBranding = StudentAreaBranding::forTenant(null);
             }
 
             // Notifications (optional table).
@@ -81,7 +70,7 @@ class ProfileController extends Controller
                 'username' => $user->username,
                 'avatar_url' => $user->avatar ? app(StorageService::class)->url($user->avatar) : null,
             ],
-            'community_href' => $communityHref,
+            'hub_nav' => $hubNav,
             'student_branding' => $studentBranding,
             'notifications_unread_count' => $notificationsUnread,
         ], $supportExtras));

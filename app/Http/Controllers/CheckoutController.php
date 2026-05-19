@@ -622,9 +622,8 @@ class CheckoutController extends Controller
 
         $plainPassword = null;
         if ($product->type === Product::TYPE_AREA_MEMBROS) {
-            $loginConfig = $product->member_area_config['login'] ?? [];
-            $passwordMode = $loginConfig['password_mode'] ?? 'auto';
-            $defaultPassword = trim((string) ($loginConfig['default_password'] ?? ''));
+            $passwordMode = (string) Setting::get('login_password_mode', 'auto', $tenantId);
+            $defaultPassword = trim((string) Setting::get('login_default_password', '', $tenantId));
             if ($passwordMode === 'default' && $defaultPassword !== '') {
                 $plainPassword = $defaultPassword;
             } else {

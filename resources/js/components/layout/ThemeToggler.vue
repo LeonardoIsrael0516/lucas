@@ -13,7 +13,7 @@ function setTheme(value) {
 
 onMounted(() => {
     const stored = localStorage.getItem('theme');
-    const initial = stored || 'dark';
+    const initial = stored || 'light';
     theme.value = initial;
     document.documentElement.classList.toggle('dark', initial === 'dark');
 });

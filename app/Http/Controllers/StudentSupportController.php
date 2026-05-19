@@ -61,25 +61,17 @@ class StudentSupportController extends Controller
             'suporte_href' => route('student-support.index'),
             'profile_href' => route('profile.index'),
             'notifications_unread_count' => $this->safeUnreadNotificationsCount(auth()->user()),
-            'community_href' => null,
+            'hub_nav' => [
+                'community_enabled' => \App\Support\StudentAreaSettings::communityEnabled($tenantId),
+                'certificate_enabled' => \App\Support\StudentAreaSettings::certificateEnabled($tenantId),
+                'gamification_enabled' => \App\Support\StudentAreaSettings::gamificationEnabled($tenantId),
+            ],
         ];
     }
 
     private function studentBrandingPayload(int $tenantId): array
     {
-        $primary = (string) Setting::get('student_area_primary', '#0ea5e9', $tenantId);
-        $logoUrl = null;
-        $logoPath = (string) Setting::get('student_area_logo', '', $tenantId);
-        if ($logoPath !== '') {
-            try {
-                $storage = new \App\Services\StorageService($tenantId);
-                $logoUrl = $storage->exists($logoPath) ? $storage->url($logoPath) : null;
-            } catch (\Throwable) {
-                $logoUrl = null;
-            }
-        }
-
-        return ['primary' => $primary, 'logo_url' => $logoUrl];
+        return \App\Support\StudentAreaBranding::forTenant($tenantId);
     }
 
     private function safeUnreadNotificationsCount(?\App\Models\User $user): int
@@ -89,32 +81,6 @@ class StudentSupportController extends Controller
         }
 
         return $user->unreadNotifications()->count();
-    }
-
-    private function firstCommunityHref(\App\Models\User $user): ?string
-    {
-        $ownedProducts = $user->products()
-            ->orderBy('name')
-            ->get()
-            ->filter(fn (Product $p) => $p->type === Product::TYPE_AREA_MEMBROS);
-
-        foreach ($ownedProducts as $product) {
-            $config = $product->member_area_config ?? [];
-            if (! (bool) ($config['community_enabled'] ?? false)) {
-                continue;
-            }
-            if (! $product->checkout_slug) {
-                continue;
-            }
-            if (! $product->hasMemberAreaAccess($user)) {
-                continue;
-            }
-            $base = rtrim($this->resolver->baseUrlForProduct($product), '/');
-
-            return $base.'/comunidade';
-        }
-
-        return null;
     }
 
     public function index(): Response|RedirectResponse
@@ -140,7 +106,6 @@ class StudentSupportController extends Controller
             ]);
 
         $props = $this->sharedProps($tenantId);
-        $props['community_href'] = $this->firstCommunityHref($user);
         $props['tickets'] = $tickets;
         $props['auth_user'] = [
             'name' => $user->name,
@@ -203,7 +168,6 @@ class StudentSupportController extends Controller
         $ticket->load(['messages.user']);
 
         $props = $this->sharedProps($tenantId);
-        $props['community_href'] = $this->firstCommunityHref($user);
         $props['auth_user'] = [
             'name' => $user->name,
             'email' => $user->email,

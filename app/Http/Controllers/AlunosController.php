@@ -7,6 +7,7 @@ use App\Models\User;
 use App\Events\StudentAccessDeliveryReady;
 use App\Services\AccessEmailService;
 use App\Services\MemberProgressService;
+use App\Services\ProductAccessService;
 use App\Services\TeamAccessService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -21,6 +22,10 @@ use PhpOffice\PhpSpreadsheet\IOFactory;
 class AlunosController extends Controller
 {
     private const FILTER_OPTIONS = ['todos', 'novos_30'];
+
+    public function __construct(
+        private ProductAccessService $productAccess,
+    ) {}
 
     private function tenantProductIds(?int $tenantId): array
     {
@@ -222,7 +227,7 @@ class AlunosController extends Controller
         $tenantId = auth()->user()->tenant_id;
         $validated = $request->validate([
             'name' => ['required', 'string', 'max:255'],
-            'email' => ['required', 'email', 'max:255', 'unique:users,email'],
+            'email' => ['required', 'email', 'max:255'],
             'phone' => ['nullable', 'string', 'max:32'],
             'password_mode' => ['nullable', 'string', 'in:auto,manual'],
             'password' => ['nullable', 'string', 'min:6', 'max:255'],
@@ -237,35 +242,58 @@ class AlunosController extends Controller
         $sendAccessEmail = (bool) ($validated['send_access_email'] ?? true);
         $sendAccessWhatsapp = (bool) ($validated['send_access_whatsapp'] ?? false);
 
-        $passwordMode = (string) ($validated['password_mode'] ?? 'manual');
-        if ($passwordMode === 'auto') {
-            $plainPassword = Str::random(12);
+        $linkError = $this->linkBlockedMessageForEmail($validated['email'], $tenantId);
+        if ($linkError !== null) {
+            return response()->json(['success' => false, 'message' => $linkError, 'errors' => ['email' => [$linkError]]], 422);
+        }
+
+        $existing = $this->resolveExistingAluno($validated['email'], $tenantId);
+        $linkedExisting = $existing !== null;
+
+        if ($linkedExisting) {
+            $user = $existing;
+            $user->update(['name' => $validated['name']]);
+            if (array_key_exists('phone', $validated)) {
+                $user->phone = $validated['phone'];
+                $user->save();
+            }
+            if (! empty($validated['password'])) {
+                $user->update(['password' => Hash::make($validated['password'])]);
+            }
+            if ($user->tenant_id === null) {
+                $user->update(['tenant_id' => $tenantId]);
+            }
         } else {
-            $plainPassword = (string) ($validated['password'] ?? '');
-            if (strlen($plainPassword) < 6) {
-                return response()->json(['success' => false, 'message' => 'Senha deve ter no mínimo 6 caracteres.'], 422);
+            $passwordMode = (string) ($validated['password_mode'] ?? 'manual');
+            if ($passwordMode === 'auto') {
+                $plainPassword = Str::random(12);
+            } else {
+                $plainPassword = (string) ($validated['password'] ?? '');
+                if (strlen($plainPassword) < 6) {
+                    return response()->json(['success' => false, 'message' => 'Senha deve ter no mínimo 6 caracteres.'], 422);
+                }
+            }
+
+            $user = User::create([
+                'name' => $validated['name'],
+                'email' => $validated['email'],
+                'password' => Hash::make($plainPassword),
+                'role' => User::ROLE_ALUNO,
+                'tenant_id' => $tenantId,
+            ]);
+            if (! empty($validated['phone'])) {
+                $user->phone = $validated['phone'];
+                $user->save();
             }
         }
 
-        $user = User::create([
-            'name' => $validated['name'],
-            'email' => $validated['email'],
-            'password' => Hash::make($plainPassword),
-            'role' => User::ROLE_ALUNO,
-            'tenant_id' => $tenantId,
-        ]);
-        if (! empty($validated['phone'])) {
-            $user->phone = $validated['phone'];
-            $user->save();
-        }
-
-        foreach ($productIds as $pid) {
-            $user->products()->syncWithoutDetaching([$pid]);
+        $products = Product::whereIn('id', $productIds)->get();
+        foreach ($products as $product) {
+            $this->productAccess->grant($user, $product);
         }
 
         $emailsSent = 0;
         if ($sendAccessEmail && ! empty($productIds)) {
-            $products = Product::whereIn('id', $productIds)->get();
             foreach ($products as $product) {
                 if ($accessEmailService->sendForUserProduct($user, $product)) {
                     $emailsSent++;
@@ -275,10 +303,11 @@ class AlunosController extends Controller
 
         if ($sendAccessWhatsapp) {
             // AutoZap integration will be handled by manual access event in a later step.
-            // For now we only persist the phone and return OK.
         }
 
-        $message = 'Aluno cadastrado com sucesso.';
+        $message = $linkedExisting
+            ? 'Aluno já existia: dados e acesso aos produtos foram atualizados.'
+            : 'Aluno cadastrado com sucesso.';
         if ($sendAccessEmail && $emailsSent > 0) {
             $message .= " E-mail de acesso enviado para {$emailsSent} produto(s).";
         }
@@ -286,6 +315,7 @@ class AlunosController extends Controller
         return response()->json([
             'success' => true,
             'message' => $message,
+            'linked_existing' => $linkedExisting,
             'aluno' => ['id' => $user->id, 'name' => $user->name, 'email' => $user->email, 'products_count' => count($productIds)],
         ]);
     }
@@ -323,8 +353,20 @@ class AlunosController extends Controller
         $productIds = $validated['product_ids'] ?? [];
         $productIds = array_values(array_intersect($productIds, $tenantProductIds));
         $currentIds = $aluno->products()->forTenant($tenantId)->pluck('products.id')->toArray();
-        $aluno->products()->detach($currentIds);
-        $aluno->products()->attach($productIds);
+        $removedIds = array_values(array_diff($currentIds, $productIds));
+        $newIds = array_values(array_diff($productIds, $currentIds));
+
+        if ($removedIds !== []) {
+            $aluno->products()->detach($removedIds);
+        }
+
+        $products = Product::whereIn('id', array_merge($newIds, $productIds))->get()->keyBy('id');
+        foreach ($newIds as $pid) {
+            $product = $products->get($pid);
+            if ($product) {
+                $this->productAccess->grant($aluno, $product);
+            }
+        }
 
         return response()->json([
             'success' => true,
@@ -463,10 +505,12 @@ class AlunosController extends Controller
         }
 
         $created = 0;
+        $updated = 0;
         $skipped = 0;
         $errors = [];
         $emailsSent = 0;
         $whatsappsQueued = 0;
+        $products = Product::whereIn('id', $productIds)->get();
 
         foreach ($dataRows as $idx => $row) {
             $email = isset($emailCol) && isset($row[$emailCol]) ? $row[$emailCol] : ($row[1] ?? $row[0] ?? '');
@@ -477,8 +521,9 @@ class AlunosController extends Controller
                 continue;
             }
 
-            if (User::where('email', $email)->exists()) {
-                $errors[] = "Linha " . ($idx + 2) . ": e-mail {$email} já cadastrado.";
+            $linkError = $this->linkBlockedMessageForEmail($email, $tenantId);
+            if ($linkError !== null) {
+                $errors[] = "Linha " . ($idx + 2) . ": {$linkError}";
                 $skipped++;
                 continue;
             }
@@ -490,20 +535,33 @@ class AlunosController extends Controller
                 : Str::random(12);
 
             try {
-                $user = User::create([
-                    'name' => mb_substr($name, 0, 255),
-                    'email' => $email,
-                    'password' => Hash::make($password),
-                    'role' => User::ROLE_ALUNO,
-                    'tenant_id' => $tenantId,
-                ]);
+                $existing = $this->resolveExistingAluno($email, $tenantId);
+                if ($existing) {
+                    $user = $existing;
+                    $user->update(['name' => mb_substr($name, 0, 255)]);
+                    if ($user->tenant_id === null) {
+                        $user->update(['tenant_id' => $tenantId]);
+                    }
+                    if (isset($passCol) && isset($row[$passCol]) && strlen(trim($row[$passCol] ?? '')) >= 6) {
+                        $user->update(['password' => Hash::make(trim($row[$passCol]))]);
+                    }
+                    $updated++;
+                } else {
+                    $user = User::create([
+                        'name' => mb_substr($name, 0, 255),
+                        'email' => $email,
+                        'password' => Hash::make($password),
+                        'role' => User::ROLE_ALUNO,
+                        'tenant_id' => $tenantId,
+                    ]);
+                    $created++;
+                }
 
-                foreach ($productIds as $pid) {
-                    $user->products()->syncWithoutDetaching([$pid]);
+                foreach ($products as $product) {
+                    $this->productAccess->grant($user, $product);
                 }
 
                 if ($sendAccessEmail && ! empty($productIds)) {
-                    $products = Product::whereIn('id', $productIds)->get();
                     foreach ($products as $product) {
                         if ($accessEmailService->sendForUserProduct($user, $product)) {
                             $emailsSent++;
@@ -511,17 +569,19 @@ class AlunosController extends Controller
                     }
                 }
                 if ($sendAccessWhatsapp) {
-                    // AutoZap integration is event-driven; handled via manual access event in UI flow.
                     $whatsappsQueued++;
                 }
-                $created++;
             } catch (\Throwable $e) {
                 $errors[] = "Linha " . ($idx + 2) . ": " . $e->getMessage();
                 $skipped++;
             }
         }
 
-        $message = "{$created} aluno(s) importado(s) com sucesso.";
+        $message = "{$created} aluno(s) criado(s)";
+        if ($updated > 0) {
+            $message .= ", {$updated} atualizado(s)";
+        }
+        $message .= ' com sucesso.';
         if ($skipped > 0) {
             $message .= " {$skipped} linha(s) ignorada(s).";
         }
@@ -609,5 +669,41 @@ class AlunosController extends Controller
             'message' => 'Acesso ao produto removido.',
             'products_count' => $remaining,
         ]);
+    }
+
+    private function resolveExistingAluno(string $email, int $tenantId): ?User
+    {
+        $emailNormalized = strtolower(trim($email));
+        $existing = User::query()->whereRaw('LOWER(email) = ?', [$emailNormalized])->first();
+        if (! $existing || ! $existing->isAluno()) {
+            return null;
+        }
+
+        if ((int) $existing->tenant_id === $tenantId || $existing->tenant_id === null) {
+            return $existing;
+        }
+
+        if ($existing->products()->where('products.tenant_id', $tenantId)->exists()) {
+            return $existing;
+        }
+
+        return null;
+    }
+
+    private function linkBlockedMessageForEmail(string $email, int $tenantId): ?string
+    {
+        $emailNormalized = strtolower(trim($email));
+        $user = User::query()->whereRaw('LOWER(email) = ?', [$emailNormalized])->first();
+        if (! $user) {
+            return null;
+        }
+        if (! $user->isAluno()) {
+            return 'Este e-mail pertence a um usuário da equipe ou administrador.';
+        }
+        if ($this->resolveExistingAluno($email, $tenantId) !== null) {
+            return null;
+        }
+
+        return 'Este e-mail já está cadastrado em outra conta.';
     }
 }

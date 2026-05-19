@@ -14,6 +14,7 @@ class MemberModule extends Model
         'title',
         'position',
         'thumbnail',
+        'cover_mode',
         'show_title_on_cover',
         'related_product_id',
         'source_member_module_id',

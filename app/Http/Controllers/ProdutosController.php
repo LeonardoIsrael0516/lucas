@@ -112,6 +112,7 @@ class ProdutosController extends Controller
             'currency' => ['nullable', 'string', 'in:BRL,EUR,USD'],
             'is_active' => ['boolean'],
             'image' => ['nullable', 'image', 'max:2048'],
+            'member_area_cover' => ['nullable', 'image', 'max:4096'],
             'deliverable_link' => ['nullable', 'string', 'url', 'max:500'],
         ]);
         $validated['tenant_id'] = auth()->user()->tenant_id;
@@ -126,7 +127,7 @@ class ProdutosController extends Controller
             return back()->with('error', $beforeEvent->abort)->withInput();
         }
 
-        unset($validated['image']);
+        unset($validated['image'], $validated['member_area_cover']);
         $deliverableLink = $validated['deliverable_link'] ?? null;
         unset($validated['deliverable_link']);
         $product = Product::create($validated);
@@ -138,8 +139,9 @@ class ProdutosController extends Controller
         }
 
         if ($request->hasFile('image')) {
-            $path = app(StorageService::class)->putFile('products', $request->file('image'));
-            $product->update(['image' => $path]);
+            $this->persistProductCoverImage($product, $request->file('image'));
+        } elseif ($request->hasFile('member_area_cover')) {
+            $this->persistProductCoverImage($product, $request->file('member_area_cover'));
         }
 
         event(new ProductCreated($product));
@@ -421,6 +423,7 @@ class ProdutosController extends Controller
             'currency' => ['nullable', 'string', 'in:BRL,EUR,USD'],
             'is_active' => ['boolean'],
             'image' => ['nullable', 'image', 'max:2048'],
+            'member_area_cover' => ['nullable', 'image', 'max:4096'],
             'conversion_pixels' => ['nullable', 'array'],
             'conversion_pixels.meta' => ['nullable', 'array'],
             'conversion_pixels.meta.enabled' => ['nullable', 'boolean'],
@@ -513,8 +516,13 @@ class ProdutosController extends Controller
             'pagarme_billing.company_address.neighborhood' => ['nullable', 'string', 'max:255'],
             'pagarme_billing.company_address.city' => ['nullable', 'string', 'max:255'],
             'pagarme_billing.company_address.state' => ['nullable', 'string', 'max:2'],
+            'course_access_days' => ['nullable', 'integer', 'min:0', 'max:3650'],
         ]);
         $validated['is_active'] = $request->boolean('is_active', true);
+        if (array_key_exists('course_access_days', $validated)) {
+            $days = $validated['course_access_days'];
+            $validated['course_access_days'] = ($days === null || (int) $days <= 0) ? null : (int) $days;
+        }
         $validated['currency'] = $validated['currency'] ?? config('products.currency_default', 'BRL');
 
         $tenantId = auth()->user()->tenant_id;
@@ -531,7 +539,8 @@ class ProdutosController extends Controller
         }
 
         $oldImage = $produto->image;
-        unset($validated['image']);
+        $oldMemberAreaCover = $produto->member_area_cover;
+        unset($validated['image'], $validated['member_area_cover']);
         $paymentGateways = $validated['payment_gateways'] ?? null;
         unset($validated['payment_gateways']);
         $pagarmeBillingInput = array_key_exists('pagarme_billing', $validated) ? $validated['pagarme_billing'] : null;
@@ -685,12 +694,9 @@ class ProdutosController extends Controller
         }
 
         if ($request->hasFile('image')) {
-            $storage = app(StorageService::class);
-            if ($oldImage && $storage->exists($oldImage)) {
-                $storage->delete($oldImage);
-            }
-            $path = $storage->putFile('products', $request->file('image'));
-            $produto->update(['image' => $path]);
+            $this->persistProductCoverImage($produto, $request->file('image'), $oldImage, $oldMemberAreaCover);
+        } elseif ($request->hasFile('member_area_cover')) {
+            $this->persistProductCoverImage($produto, $request->file('member_area_cover'), $oldImage, $oldMemberAreaCover);
         }
 
         event(new ProductUpdated($produto));
@@ -709,8 +715,10 @@ class ProdutosController extends Controller
         $this->authorizeProduct($produto);
         event(new ProductDeleted($produto));
         $storage = app(StorageService::class);
-        if ($produto->image && $storage->exists($produto->image)) {
-            $storage->delete($produto->image);
+        foreach (array_unique(array_filter([$produto->image, $produto->member_area_cover])) as $storedPath) {
+            if ($storage->exists($storedPath)) {
+                $storage->delete($storedPath);
+            }
         }
         $produto->delete();
 
@@ -754,33 +762,30 @@ class ProdutosController extends Controller
                 $newProduct->save();
             }
         }
+        if ($produto->member_area_cover) {
+            $copiedCover = $this->copyStorageAssetBestEffort($storage, $produto->member_area_cover, 'products/'.$newProduct->id);
+            if ($copiedCover) {
+                $newProduct->member_area_cover = $copiedCover;
+                $newProduct->save();
+            }
+        }
 
         // Deep-copy member area content (sections/modules/lessons) for member-area products
         if ($produto->type === Product::TYPE_AREA_MEMBROS) {
-            $produto->loadMissing(['memberSections.modules.lessons']);
+            $produto->loadMissing(['memberModules.lessons']);
 
-            $newSections = [];
-            foreach ($produto->memberSections as $s) {
-                $newS = MemberSection::create([
-                    'product_id' => $newProduct->id,
-                    'title' => $s->title,
-                    'position' => $s->position,
-                    'cover_mode' => $s->cover_mode ?? 'vertical',
-                    'section_type' => $s->section_type ?? 'courses',
-                ]);
-                $newSections[$s->id] = $newS;
-
-                foreach ($s->modules as $m) {
+            foreach ($produto->memberModules as $m) {
                     $thumbPath = null;
                     if (! empty($m->thumbnail)) {
                         $thumbPath = $this->copyStorageAssetBestEffort($storage, $m->thumbnail, 'member-area/'.$newProduct->id);
                     }
                     $newM = MemberModule::create([
-                        'member_section_id' => $newS->id,
+                        'member_section_id' => null,
                         'product_id' => $newProduct->id,
                         'title' => $m->title,
                         'position' => $m->position,
                         'thumbnail' => $thumbPath ?: $m->thumbnail,
+                        'cover_mode' => $m->cover_mode ?? 'vertical',
                         'show_title_on_cover' => $m->show_title_on_cover ?? true,
                         'release_after_days' => $m->release_after_days,
                         'release_at_date' => $m->release_at_date,
@@ -834,7 +839,6 @@ class ProdutosController extends Controller
                             'watermark_enabled' => (bool) ($l->watermark_enabled ?? false),
                         ]);
                     }
-                }
             }
         }
 
@@ -895,7 +899,7 @@ class ProdutosController extends Controller
         $this->authorizeProduct($produto);
         $validated = $request->validate(['email' => ['required', 'email', 'exists:users,email']]);
         $user = User::where('email', $validated['email'])->where('role', User::ROLE_ALUNO)->firstOrFail();
-        $produto->users()->syncWithoutDetaching([$user->id]);
+        app(\App\Services\ProductAccessService::class)->grant($user, $produto);
 
         return back()->with('success', 'Acesso concedido.');
     }
@@ -1150,6 +1154,9 @@ class ProdutosController extends Controller
         $imageUrl = $p->image
             ? app(StorageService::class)->url($p->image)
             : null;
+        $memberAreaCoverUrl = $p->member_area_cover
+            ? app(StorageService::class)->url($p->member_area_cover)
+            : null;
 
         $config = Product::typeConfig()[$p->type] ?? null;
         $typeLabel = $config['label'] ?? $p->type;
@@ -1169,6 +1176,8 @@ class ProdutosController extends Controller
             'billing_type_label' => $billingLabels[$billingType] ?? $billingType,
             'image' => $p->image,
             'image_url' => $imageUrl,
+            'member_area_cover' => $p->member_area_cover,
+            'member_area_cover_url' => $memberAreaCoverUrl,
             'price' => (float) $p->price,
             'currency' => $p->currency ?? 'BRL',
             'price_brl' => round($priceBrl, 2),
@@ -1179,6 +1188,7 @@ class ProdutosController extends Controller
             'vendas_count' => (int) ($p->vendas_count ?? 0),
             'conversion_pixels' => $p->conversion_pixels,
             'combo_product_ids' => $p->combo_product_ids ?? [],
+            'course_access_days' => $p->course_access_days,
         ];
     }
 
@@ -1311,5 +1321,33 @@ class ProdutosController extends Controller
             }
         }
         return $byMethod;
+    }
+
+    /**
+     * Capa do produto (checkout) e da área do aluno compartilham o mesmo arquivo para cursos.
+     */
+    private function persistProductCoverImage(
+        Product $product,
+        \Illuminate\Http\UploadedFile $file,
+        ?string $oldImage = null,
+        ?string $oldMemberAreaCover = null
+    ): void {
+        $storage = app(StorageService::class);
+        $path = $storage->putFile('products', $file);
+
+        foreach (array_unique(array_filter([$oldImage, $oldMemberAreaCover])) as $previous) {
+            if ($previous === $path) {
+                continue;
+            }
+            if ($storage->exists($previous)) {
+                $storage->delete($previous);
+            }
+        }
+
+        $updates = ['image' => $path];
+        if ($product->type === Product::TYPE_AREA_MEMBROS) {
+            $updates['member_area_cover'] = $path;
+        }
+        $product->update($updates);
     }
 }

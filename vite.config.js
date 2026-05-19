@@ -31,6 +31,17 @@ export default defineConfig({
         include: ['pdfjs-dist'],
     },
     server: {
+        host: 'getfy-opensource-lucas.test',
+        port: 5173,
+        strictPort: true,
+        origin: 'http://getfy-opensource-lucas.test:5173',
+        cors: {
+            origin: 'http://getfy-opensource-lucas.test',
+        },
+        hmr: {
+            host: 'getfy-opensource-lucas.test',
+            port: 5173,
+        },
         watch: {
             ignored: ['**/storage/framework/views/**'],
         },

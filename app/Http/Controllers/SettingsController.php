@@ -58,16 +58,26 @@ class SettingsController extends Controller
         $storageS3Url = (string) Setting::get('storage_s3_url', '', $tenantId);
         $storageS3SecretRaw = (string) Setting::get('storage_s3_secret', '', $tenantId);
 
-        $studentLogoPath = (string) Setting::get('student_area_logo', '', $tenantId);
-        $studentLogoUrl = null;
-        if ($studentLogoPath !== '') {
+        $loginLogoPath = (string) Setting::get('login_logo', '', $tenantId);
+        $loginBgPath = (string) Setting::get('login_background_image', '', $tenantId);
+        $loginLogoUrl = null;
+        $loginBackgroundUrl = null;
+        if ($loginLogoPath !== '' || $loginBgPath !== '') {
             try {
-                $storage = new StorageService($tenantId);
-                $studentLogoUrl = $storage->exists($studentLogoPath) ? $storage->url($studentLogoPath) : null;
+                $storageLogin = new StorageService($tenantId);
+                if ($loginLogoPath !== '') {
+                    $loginLogoUrl = $storageLogin->exists($loginLogoPath) ? $storageLogin->url($loginLogoPath) : null;
+                }
+                if ($loginBgPath !== '') {
+                    $loginBackgroundUrl = $storageLogin->exists($loginBgPath) ? $storageLogin->url($loginBgPath) : null;
+                }
             } catch (\Throwable) {
-                $studentLogoUrl = null;
+                $loginLogoUrl = null;
+                $loginBackgroundUrl = null;
             }
         }
+        $loginWithoutPasswordRaw = Setting::get('login_without_password', '0', $tenantId);
+        $loginWithoutPassword = $loginWithoutPasswordRaw === '1' || $loginWithoutPasswordRaw === 1 || $loginWithoutPasswordRaw === true;
 
         $cloudR2Managed = $cloudMode
             && $r2EnvConfigured
@@ -115,11 +125,20 @@ class SettingsController extends Controller
                 'storage_s3_url' => $cloudR2Managed ? '' : $storageS3Url,
                 'storage_cloud_r2_managed' => $cloudR2Managed,
                 'student_area_primary' => Setting::get('student_area_primary', '#0ea5e9', $tenantId),
-                'student_area_logo' => $studentLogoPath,
-                'student_area_logo_url' => $studentLogoUrl,
                 'student_support_enabled' => Setting::get('student_support_enabled', '0', $tenantId) === '1',
                 'student_support_whatsapp_enabled' => Setting::get('student_support_whatsapp_enabled', '0', $tenantId) === '1',
                 'student_support_whatsapp_url' => (string) Setting::get('student_support_whatsapp_url', '', $tenantId),
+                'login_title' => (string) Setting::get('login_title', 'Área de Membros', $tenantId),
+                'login_subtitle' => (string) Setting::get('login_subtitle', 'Entre com seu e-mail e senha', $tenantId),
+                'login_background_color' => (string) Setting::get('login_background_color', '#18181b', $tenantId),
+                'login_primary_color' => (string) Setting::get('login_primary_color', '#0ea5e9', $tenantId),
+                'login_logo' => $loginLogoPath,
+                'login_logo_url' => $loginLogoUrl,
+                'login_background_image' => $loginBgPath,
+                'login_background_image_url' => $loginBackgroundUrl,
+                'login_password_mode' => (string) Setting::get('login_password_mode', 'auto', $tenantId),
+                'login_default_password' => (string) Setting::get('login_default_password', '', $tenantId),
+                'login_without_password' => $loginWithoutPassword,
             ],
         ]);
     }
@@ -127,6 +146,7 @@ class SettingsController extends Controller
     public function update(Request $request)
     {
         $validated = $request->validate([
+            'active_tab' => ['nullable', 'string', 'max:64'],
             'email_provider' => ['nullable', 'string', 'in:smtp,hostinger,sendgrid'],
             'smtp_password' => ['nullable', 'string', 'max:255'],
             'mail_from_address' => ['nullable', 'email', 'max:255'],
@@ -156,15 +176,25 @@ class SettingsController extends Controller
             'storage_s3_endpoint' => ['nullable', 'string', 'max:512'],
             'storage_s3_url' => ['nullable', 'string', 'max:512'],
             'student_area_primary' => ['nullable', 'string', 'max:32'],
-            'student_area_logo' => ['nullable', 'image', 'max:2048'],
             'student_support_enabled' => ['sometimes', 'boolean'],
             'student_support_whatsapp_enabled' => ['sometimes', 'boolean'],
             'student_support_whatsapp_url' => ['nullable', 'string', 'max:512'],
+            'login_title' => ['nullable', 'string', 'max:255'],
+            'login_subtitle' => ['nullable', 'string', 'max:255'],
+            'login_background_color' => ['nullable', 'string', 'max:32'],
+            'login_primary_color' => ['nullable', 'string', 'max:32'],
+            'login_password_mode' => ['nullable', 'string', 'in:auto,default'],
+            'login_default_password' => ['nullable', 'string', 'max:255'],
+            'login_without_password' => ['sometimes', 'boolean'],
+            'login_logo' => ['nullable', 'image', 'max:2048'],
+            'login_background_image' => ['nullable', 'image', 'max:5120'],
         ]);
 
         $tenantId = auth()->user()->tenant_id;
 
-        if ($request->boolean('student_support_whatsapp_enabled')) {
+        $activeTab = (string) $request->input('active_tab', '');
+        $validatingStudentSupport = $activeTab === 'suporte';
+        if ($validatingStudentSupport && $request->boolean('student_support_whatsapp_enabled')) {
             $waUrlCheck = trim((string) $request->input('student_support_whatsapp_url', ''));
             if ($waUrlCheck === '' || ! filter_var($waUrlCheck, FILTER_VALIDATE_URL)) {
                 return back()->withErrors([
@@ -185,18 +215,31 @@ class SettingsController extends Controller
             'sendgrid_mail_from_address', 'sendgrid_mail_from_name',
         ];
         $alwaysSetKeys = ['email_provider'];
+        $loginTextKeys = [
+            'login_title', 'login_subtitle', 'login_background_color', 'login_primary_color',
+            'login_password_mode', 'login_default_password',
+        ];
         $brandingKeys = ['theme_primary', 'app_name', 'app_logo', 'app_logo_dark', 'app_logo_icon', 'app_logo_icon_dark'];
 
-        // Upload do logo da área do aluno
-        if ($request->hasFile('student_area_logo')) {
+        if ($request->hasFile('login_logo')) {
             try {
                 $storage = app(\App\Services\StorageService::class);
-                $path = $storage->putFile('branding', $request->file('student_area_logo'));
-                Setting::set('student_area_logo', $path, $tenantId);
+                $path = $storage->putFile('branding', $request->file('login_logo'));
+                Setting::set('login_logo', $path, $tenantId);
             } catch (\Throwable $e) {
                 report($e);
             }
         }
+        if ($request->hasFile('login_background_image')) {
+            try {
+                $storage = app(\App\Services\StorageService::class);
+                $path = $storage->putFile('branding', $request->file('login_background_image'));
+                Setting::set('login_background_image', $path, $tenantId);
+            } catch (\Throwable $e) {
+                report($e);
+            }
+        }
+        Setting::set('login_without_password', $request->boolean('login_without_password') ? '1' : '0', $tenantId);
         // Handle passwords separately (encrypt)
         if (array_key_exists('smtp_password', $validated) && $validated['smtp_password'] !== null && $validated['smtp_password'] !== '') {
             Setting::set('smtp_password', encrypt($validated['smtp_password']), $tenantId);
@@ -223,8 +266,8 @@ class SettingsController extends Controller
             if (in_array($key, $brandingKeys, true)) {
                 continue; // branding hardcoded in config/getfy.php - never save
             }
-            if ($key === 'student_area_logo') {
-                continue; // handled via upload above
+            if (in_array($key, ['login_logo', 'login_background_image', 'login_without_password'], true)) {
+                continue; // uploads / boolean handled above
             }
 
             if (in_array($key, $alwaysSetKeys, true) || in_array($key, $emailKeys, true)) {
@@ -235,6 +278,8 @@ class SettingsController extends Controller
                 if (is_array($value) && ! empty($value)) {
                     Setting::set($key, $value, $tenantId);
                 }
+            } elseif (in_array($key, $loginTextKeys, true)) {
+                Setting::set($key, $value ?? '', $tenantId);
             } elseif ($value !== null && $value !== '') {
                 Setting::set($key, $value, $tenantId);
             }

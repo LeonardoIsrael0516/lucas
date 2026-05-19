@@ -155,6 +155,7 @@ Route::middleware('guest')->group(function () {
     Route::post('/criar-admin', [\App\Http\Controllers\CreateFirstAdminController::class, 'store'])->middleware('throttle:5,1');
     Route::get('/login', [LoginController::class, 'showLoginForm'])->name('login');
     Route::post('/login', [LoginController::class, 'login'])->middleware('throttle:5,1');
+    Route::post('/login-without-password', [LoginController::class, 'loginWithoutPassword'])->name('login.without-password')->middleware('throttle:5,1');
     Route::get('/esqueci-senha', [ForgotPasswordController::class, 'showLinkRequestForm'])->name('password.request');
     Route::post('/esqueci-senha', [ForgotPasswordController::class, 'sendResetLinkEmail'])->name('password.email')->middleware('throttle:6,1');
     Route::get('/redefinir-senha/{token}', [ResetPasswordController::class, 'showResetForm'])->name('password.reset');
@@ -347,7 +348,7 @@ Route::middleware(['auth', 'admin.tenant', 'role:admin|infoprodutor|team', 'audi
         Route::post('/produtos/{produto}/member-builder/sections', [\App\Http\Controllers\MemberBuilderController::class, 'storeSection'])->name('member-builder.sections.store');
         Route::put('/produtos/{produto}/member-builder/sections/{section}', [\App\Http\Controllers\MemberBuilderController::class, 'updateSection'])->name('member-builder.sections.update');
         Route::delete('/produtos/{produto}/member-builder/sections/{section}', [\App\Http\Controllers\MemberBuilderController::class, 'destroySection'])->name('member-builder.sections.destroy');
-        Route::post('/produtos/{produto}/member-builder/sections/{section}/modules', [\App\Http\Controllers\MemberBuilderController::class, 'storeModule'])->name('member-builder.modules.store');
+        Route::post('/produtos/{produto}/member-builder/modules', [\App\Http\Controllers\MemberBuilderController::class, 'storeModule'])->name('member-builder.modules.store');
         Route::put('/produtos/{produto}/member-builder/modules/{module}', [\App\Http\Controllers\MemberBuilderController::class, 'updateModule'])->name('member-builder.modules.update');
         Route::post('/produtos/{produto}/member-builder/modules/{module}/duplicate', [\App\Http\Controllers\MemberBuilderController::class, 'duplicateModule'])->name('member-builder.modules.duplicate');
         Route::delete('/produtos/{produto}/member-builder/modules/{module}', [\App\Http\Controllers\MemberBuilderController::class, 'destroyModule'])->name('member-builder.modules.destroy');
@@ -477,10 +478,41 @@ Route::middleware(['auth', 'admin.tenant', 'role:admin|infoprodutor|team', 'audi
         Route::post('/suporte-alunos/{ticket}/close', [\App\Http\Controllers\SupportTicketsManageController::class, 'close'])->name('support-tickets.close');
     });
 
+    Route::middleware('team.permission:configuracoes.view')->prefix('area-aluno')->name('area-aluno.')->group(function () {
+        Route::get('/', [\App\Http\Controllers\StudentAreaManageController::class, 'index'])->name('index');
+        Route::get('/personalizacao', [\App\Http\Controllers\StudentAreaManageController::class, 'personalizacao'])->name('personalizacao');
+        Route::post('/personalizacao', [\App\Http\Controllers\StudentAreaManageController::class, 'updatePersonalizacao'])->name('personalizacao.update');
+        Route::get('/login', [\App\Http\Controllers\StudentAreaManageController::class, 'login'])->name('login');
+        Route::post('/login', [\App\Http\Controllers\StudentAreaManageController::class, 'updateLogin'])->name('login.update');
+        Route::get('/suporte', [\App\Http\Controllers\StudentAreaManageController::class, 'suporte'])->name('suporte');
+        Route::post('/suporte', [\App\Http\Controllers\StudentAreaManageController::class, 'updateSuporte'])->name('suporte.update');
+        Route::get('/comunidade', [\App\Http\Controllers\StudentAreaManageController::class, 'comunidade'])->name('comunidade');
+        Route::put('/comunidade/settings', [\App\Http\Controllers\StudentAreaManageController::class, 'updateComunidadeSettings'])->name('comunidade.settings');
+        Route::post('/comunidade/pages', [\App\Http\Controllers\StudentAreaManageController::class, 'storeCommunityPage'])->name('comunidade.pages.store');
+        Route::put('/comunidade/pages/{page}', [\App\Http\Controllers\StudentAreaManageController::class, 'updateCommunityPage'])->name('comunidade.pages.update');
+        Route::delete('/comunidade/pages/{page}', [\App\Http\Controllers\StudentAreaManageController::class, 'destroyCommunityPage'])->name('comunidade.pages.destroy');
+        Route::post('/comunidade/upload-banner', [\App\Http\Controllers\StudentAreaManageController::class, 'uploadCommunityBanner'])->name('comunidade.upload-banner');
+        Route::get('/certificado', [\App\Http\Controllers\StudentAreaManageController::class, 'certificado'])->name('certificado');
+        Route::put('/certificado', [\App\Http\Controllers\StudentAreaManageController::class, 'updateCertificado'])->name('certificado.update');
+        Route::get('/gamificacao', [\App\Http\Controllers\StudentAreaManageController::class, 'gamificacao'])->name('gamificacao');
+        Route::put('/gamificacao', [\App\Http\Controllers\StudentAreaManageController::class, 'updateGamificacao'])->name('gamificacao.update');
+        Route::post('/gamificacao/upload-badge', [\App\Http\Controllers\StudentAreaManageController::class, 'uploadGamificationBadge'])->name('gamificacao.upload-badge');
+    });
+
 });
 
 Route::middleware(['auth', 'role:aluno'])->group(function () {
     Route::get('/area-membros', [\App\Http\Controllers\MemberAreaController::class, 'index'])->name('member-area.index');
+    Route::get('/area-membros/comunidade', [\App\Http\Controllers\StudentAreaHubController::class, 'comunidade'])->name('student-hub.comunidade');
+    Route::get('/area-membros/comunidade/{pageSlug}', [\App\Http\Controllers\StudentAreaHubController::class, 'comunidadePage'])->name('student-hub.comunidade.page');
+    Route::post('/area-membros/comunidade/{pageSlug}/posts', [\App\Http\Controllers\StudentAreaHubController::class, 'storeCommunityPost'])->name('student-hub.comunidade.posts.store');
+    Route::delete('/area-membros/comunidade/{pageSlug}/posts/{post}', [\App\Http\Controllers\StudentAreaHubController::class, 'destroyCommunityPost'])->name('student-hub.comunidade.posts.destroy');
+    Route::post('/area-membros/comunidade/{pageSlug}/posts/{post}/like', [\App\Http\Controllers\StudentAreaHubController::class, 'likeCommunityPost'])->name('student-hub.comunidade.posts.like');
+    Route::delete('/area-membros/comunidade/{pageSlug}/posts/{post}/like', [\App\Http\Controllers\StudentAreaHubController::class, 'unlikeCommunityPost'])->name('student-hub.comunidade.posts.unlike');
+    Route::post('/area-membros/comunidade/{pageSlug}/posts/{post}/comments', [\App\Http\Controllers\StudentAreaHubController::class, 'storeCommunityPostComment'])->name('student-hub.comunidade.posts.comments.store');
+    Route::get('/area-membros/certificados', [\App\Http\Controllers\StudentAreaHubController::class, 'certificados'])->name('student-hub.certificados');
+    Route::get('/area-membros/certificados/{product}', [\App\Http\Controllers\StudentAreaHubController::class, 'certificadoShow'])->name('student-hub.certificado.show');
+    Route::get('/area-membros/conquistas', [\App\Http\Controllers\StudentAreaHubController::class, 'conquistas'])->name('student-hub.conquistas');
     Route::get('/suporte', [\App\Http\Controllers\StudentSupportController::class, 'index'])->name('student-support.index');
     Route::post('/suporte', [\App\Http\Controllers\StudentSupportController::class, 'store'])->name('student-support.store');
     Route::get('/suporte/{ticket}', [\App\Http\Controllers\StudentSupportController::class, 'show'])->name('student-support.show');
@@ -498,16 +530,16 @@ Route::prefix('m/{slug}')->where(['slug' => '[a-zA-Z0-9\-]{3,64}'])->middleware(
 
         return response()->file($path, ['Content-Type' => 'application/javascript']);
     })->name('member-area-app.sw');
-    Route::get('login', [\App\Http\Controllers\MemberAreaLoginController::class, 'showLoginForm'])->name('member-area.login')->middleware('guest');
-    Route::post('login', [\App\Http\Controllers\MemberAreaLoginController::class, 'login'])->name('member-area.login.post')->middleware(['guest', 'throttle:5,1']);
-    Route::post('login-without-password', [\App\Http\Controllers\MemberAreaLoginController::class, 'loginWithoutPassword'])->name('member-area.login.without-password')->middleware(['guest', 'throttle:5,1']);
-    Route::get('esqueci-senha', [\App\Http\Controllers\MemberAreaForgotPasswordController::class, 'showLinkRequestForm'])->name('member-area.password.request')->middleware('guest');
-    Route::post('esqueci-senha', [\App\Http\Controllers\MemberAreaForgotPasswordController::class, 'sendResetLinkEmail'])->name('member-area.password.email')->middleware(['guest', 'throttle:6,1']);
+    Route::get('login', fn () => redirect('/login', 301))->middleware('guest');
+    Route::post('login', fn () => redirect('/login', 302))->middleware(['guest', 'throttle:5,1']);
+    Route::post('login-without-password', fn () => redirect('/login', 302))->middleware(['guest', 'throttle:5,1']);
+    Route::get('esqueci-senha', fn () => redirect('/esqueci-senha', 301))->middleware('guest');
+    Route::post('esqueci-senha', fn () => redirect('/esqueci-senha', 302))->middleware(['guest', 'throttle:6,1']);
     Route::get('access', [\App\Http\Controllers\MemberAreaLoginController::class, 'magicAccess'])->name('member-area.magic-access')->middleware('member.area.signed');
 
     Route::middleware(['member.area.access'])->group(function () {
         Route::get('/', [\App\Http\Controllers\MemberAreaAppController::class, 'show'])->name('member-area-app.show');
-        Route::get('modulos', fn (string $slug) => redirect()->route('member-area-app.show', $slug))->name('member-area-app.modulos');
+        Route::get('modulos', [\App\Http\Controllers\MemberAreaAppController::class, 'modulos'])->name('member-area-app.modulos');
         Route::get('modulo/{module}', [\App\Http\Controllers\MemberAreaAppController::class, 'moduleContent'])->name('member-area-app.module');
         Route::get('aula/{lesson}', [\App\Http\Controllers\MemberAreaAppController::class, 'lesson'])->name('member-area-app.lesson');
         // Outros produtos: abrir dentro da mesma área (resolve para módulo embutido) ou abrir deliverable (produto tipo Link)
@@ -525,7 +557,6 @@ Route::prefix('m/{slug}')->where(['slug' => '[a-zA-Z0-9\-]{3,64}'])->middleware(
         Route::post('aula/{lesson}/like', [\App\Http\Controllers\MemberAreaAppController::class, 'toggleLessonLike'])->middleware('throttle:60,1')->name('member-area-app.lesson.like');
         Route::post('aula/{lesson}/complete', [\App\Http\Controllers\MemberAreaAppController::class, 'completeLesson'])->name('member-area-app.lesson.complete');
         Route::post('aula/{lesson}/comments', [\App\Http\Controllers\MemberAreaAppController::class, 'storeLessonComment'])->name('member-area-app.lesson.comments.store');
-        Route::get('loja', [\App\Http\Controllers\MemberAreaAppController::class, 'loja'])->name('member-area-app.loja');
         Route::get('comunidade', [\App\Http\Controllers\MemberAreaAppController::class, 'comunidade'])->name('member-area-app.comunidade');
         Route::get('comunidade/{pageSlug}', [\App\Http\Controllers\MemberAreaAppController::class, 'comunidadePage'])->name('member-area-app.comunidade.page');
         Route::post('comunidade/{pageSlug}/posts', [\App\Http\Controllers\MemberAreaAppController::class, 'storeCommunityPost'])->name('member-area-app.comunidade.posts.store');
@@ -555,20 +586,6 @@ Route::middleware(['web', 'member.area.resolve.by.host'])->group(function () {
         return response()->file($path, ['Content-Type' => 'application/javascript']);
     })->name('member-area-app.sw.host');
     Route::get('access', [\App\Http\Controllers\MemberAreaLoginController::class, 'magicAccessHost'])->name('member-area.magic-access.host')->middleware('member.area.signed');
-    // Login da área de membros por host: não registramos GET/POST /login aqui para não sobrescrever
-    // o login da plataforma. O Auth\LoginController delega para MemberAreaLoginController quando
-    // o host for de área de membros (subdomínio ou domínio próprio).
-    Route::post('login-without-password', function (\Illuminate\Http\Request $request) {
-        $slug = $request->attributes->get('member_area_slug');
-        if (! $slug) {
-            abort(404);
-        }
-
-        return app()->call(\App\Http\Controllers\MemberAreaLoginController::class.'@loginWithoutPassword', [
-            'request' => $request,
-            'slug' => $slug,
-        ]);
-    })->name('member-area.login.without-password.host')->middleware(['guest', 'throttle:5,1']);
 
     Route::middleware(['member.area.access'])->group(function () {
         Route::get('modulos', [\App\Http\Controllers\MemberAreaAppController::class, 'modulos'])->name('member-area-app.modulos.host');
@@ -589,7 +606,6 @@ Route::middleware(['web', 'member.area.resolve.by.host'])->group(function () {
         Route::post('aula/{lesson}/like', [\App\Http\Controllers\MemberAreaAppController::class, 'toggleLessonLike'])->middleware('throttle:60,1')->name('member-area-app.lesson.like.host');
         Route::post('aula/{lesson}/complete', [\App\Http\Controllers\MemberAreaAppController::class, 'completeLesson'])->name('member-area-app.lesson.complete.host');
         Route::post('aula/{lesson}/comments', [\App\Http\Controllers\MemberAreaAppController::class, 'storeLessonComment'])->name('member-area-app.lesson.comments.store.host');
-        Route::get('loja', [\App\Http\Controllers\MemberAreaAppController::class, 'loja'])->name('member-area-app.loja.host');
         Route::get('comunidade', [\App\Http\Controllers\MemberAreaAppController::class, 'comunidade'])->name('member-area-app.comunidade.host');
         Route::get('comunidade/{pageSlug}', [\App\Http\Controllers\MemberAreaAppController::class, 'comunidadePage'])->name('member-area-app.comunidade.page.host');
         Route::post('comunidade/{pageSlug}/posts', [\App\Http\Controllers\MemberAreaAppController::class, 'storeCommunityPost'])->name('member-area-app.comunidade.posts.store.host');

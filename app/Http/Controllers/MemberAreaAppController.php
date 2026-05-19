@@ -100,7 +100,91 @@ class MemberAreaAppController extends Controller
         return $found ? $sum : null;
     }
 
-    public function show(Request $request, string $slug): Response
+    /**
+     * Entrada do curso (/m/{slug}): última aula vista, senão primeira aula desbloqueada, senão lista de módulos.
+     */
+    private function resolveEntryRedirect(Request $request, Product $product, User $user, string $slug): RedirectResponse
+    {
+        $routeSlug = $product->checkout_slug ?: $slug;
+        $accessStartAt = $this->userAccessStartAt($product, $user);
+        $now = now();
+
+        $log = MemberActivityLog::query()
+            ->where('user_id', $user->id)
+            ->where('product_id', $product->id)
+            ->where('event', 'member_area.lesson_view')
+            ->orderByDesc('created_at')
+            ->first();
+
+        if ($log && is_array($log->metadata) && ! empty($log->metadata['lesson_id'])) {
+            $lesson = MemberLesson::query()->with('module')->find((int) $log->metadata['lesson_id']);
+            if ($lesson && $lesson->module) {
+                if ((string) $lesson->product_id !== (string) $product->id) {
+                    $wrapper = $this->findWrapperForEmbeddedLesson($lesson, $product);
+                    if ($wrapper === null) {
+                        // aula de outro produto sem vínculo no curso atual — ignora log
+                    } else {
+                        $embedRedirect = $this->assertEmbeddedProductLinkAccess($wrapper, $user);
+                        if ($embedRedirect !== null) {
+                            return $embedRedirect;
+                        }
+                        $effectiveModule = $this->resolveContentModuleForWrapper($wrapper);
+                        $moduleLock = $this->moduleLockPayload($effectiveModule, $accessStartAt, $now);
+                        $lessonLock = $this->lessonLockPayload($lesson, $effectiveModule, $accessStartAt, $now);
+                        if (($moduleLock['is_locked'] ?? false) !== true && ($lessonLock['is_locked'] ?? false) !== true) {
+                            return redirect()->route(
+                                $this->memberAreaModuleRouteName($request),
+                                ['slug' => $routeSlug, 'module' => $wrapper->id, 'aula' => $lesson->id]
+                            );
+                        }
+                    }
+                } else {
+                    $effectiveModule = $lesson->module->source_member_module_id
+                        ? $this->resolveContentModuleForWrapper($lesson->module)
+                        : $lesson->module;
+                    $moduleLock = $this->moduleLockPayload($effectiveModule, $accessStartAt, $now);
+                    $lessonLock = $this->lessonLockPayload($lesson, $effectiveModule, $accessStartAt, $now);
+                    if (($moduleLock['is_locked'] ?? false) !== true && ($lessonLock['is_locked'] ?? false) !== true) {
+                        $moduleRouteId = (int) ($log->metadata['module_id'] ?? $lesson->module->id);
+
+                        return redirect()->route(
+                            $this->memberAreaModuleRouteName($request),
+                            ['slug' => $routeSlug, 'module' => $moduleRouteId, 'aula' => $lesson->id]
+                        );
+                    }
+                }
+            }
+        }
+
+        $modules = $product->memberModules()->with(['lessons'])->orderBy('position')->get();
+        foreach ($modules as $m) {
+                if ($m->source_member_module_id) {
+                    $embedRedirect = $this->assertEmbeddedProductLinkAccess($m, $user);
+                    if ($embedRedirect !== null) {
+                        return $embedRedirect;
+                    }
+                }
+                $effective = $m->source_member_module_id ? $this->resolveContentModuleForWrapper($m) : $m;
+                if (($this->moduleLockPayload($effective, $accessStartAt, $now)['is_locked'] ?? false) === true) {
+                    continue;
+                }
+                foreach ($effective->lessons->sortBy('position') as $l) {
+                    if (($this->lessonLockPayload($l, $effective, $accessStartAt, $now)['is_locked'] ?? false) === true) {
+                        continue;
+                    }
+
+                    return redirect()->route(
+                        $this->memberAreaModuleRouteName($request),
+                        ['slug' => $routeSlug, 'module' => $m->id, 'aula' => $l->id]
+                    );
+                }
+        }
+
+        return redirect()->route($this->memberAreaModulosRouteName($request), ['slug' => $routeSlug])
+            ->with('error', 'Este curso ainda não tem conteúdo disponível.');
+    }
+
+    public function show(Request $request, string $slug): RedirectResponse
     {
         $product = $this->getProduct($request);
         $user = $request->user();
@@ -109,44 +193,7 @@ class MemberAreaAppController extends Controller
             'path' => '/' . ltrim($request->path(), '/'),
         ]);
 
-        $accessStartAt = $this->userAccessStartAt($product, $user);
-        $now = now();
-        $config = $product->member_area_config;
-        $sections = $product->memberSections()->with(['modules.lessons', 'modules.relatedProduct'])->orderBy('position')->get();
-        $progressPercent = $this->progressService->completionPercent($product, $user);
-        $continueWatching = $this->getContinueWatching($product, $user);
-        $internalProducts = $product->memberInternalProducts()->with('relatedProduct')->orderBy('position')->get();
-        $baseUrl = $this->baseUrlForRequest($product, $request);
-        $userProductIds = $user->products()->pluck('products.id')->flip()->all();
-        $push = $this->pushProps($product);
-
-        return Inertia::render('MemberAreaApp/Show', [
-            'product' => $this->productToArray($product),
-            'config' => $config,
-            'sections' => $sections->map(fn (MemberSection $s) => [
-                'id' => $s->id,
-                'title' => $s->title,
-                'cover_mode' => $s->cover_mode ?? 'vertical',
-                'section_type' => $s->section_type ?? 'courses',
-                'modules' => $s->modules->map(fn ($m) => $this->mapModuleForMemberArea($m, $s, $product, $user, $userProductIds, $baseUrl, $accessStartAt, $now))->values()->all(),
-            ])->values()->all(),
-            'progress_percent' => $progressPercent,
-            'continue_watching' => $continueWatching,
-            'internal_products' => $internalProducts->map(fn (MemberInternalProduct $ip) => [
-                'id' => $ip->related_product_id,
-                'name' => $ip->relatedProduct?->name,
-                'image_url' => $ip->relatedProduct?->image ? (new StorageService($product->tenant_id))->url($ip->relatedProduct->image) : null,
-                'checkout_slug' => $ip->relatedProduct?->checkout_slug,
-                'has_access' => $user->products()->where('products.id', $ip->related_product_id)->exists(),
-            ])->values()->all(),
-            'community_enabled' => (bool) ($config['community_enabled'] ?? false),
-            'certificate_enabled' => (bool) (($config['certificate'] ?? [])['enabled'] ?? false),
-            'can_issue_certificate' => $this->progressService->canIssueCertificate($product, $user),
-            'base_url' => $baseUrl,
-            'slug' => $slug,
-            'push_enabled' => $push['push_enabled'],
-            'vapid_public' => $push['vapid_public'],
-        ] + $this->gamificationProps($product, $user));
+        return $this->resolveEntryRedirect($request, $product, $user, $slug);
     }
 
     public function modulos(Request $request, string $slug): Response
@@ -155,37 +202,33 @@ class MemberAreaAppController extends Controller
         $user = $request->user();
         $accessStartAt = $this->userAccessStartAt($product, $user);
         $now = now();
-        $sections = $product->memberSections()->with(['modules.lessons'])->orderBy('position')->get();
+        $modules = $product->memberModules()->with(['lessons'])->orderBy('position')->get();
 
         return Inertia::render('MemberAreaApp/Modulos', [
             'product' => $this->productToArray($product),
             'config' => $product->member_area_config,
-            'sections' => $sections->map(fn (MemberSection $s) => [
-                'id' => $s->id,
-                'title' => $s->title,
-                'cover_mode' => $s->cover_mode ?? 'vertical',
-                'modules' => $s->modules->map(function (MemberModule $m) use ($accessStartAt, $now, $user) {
-                    $effective = ($m->source_member_module_id)
-                        ? $this->resolveContentModuleForWrapper($m)
-                        : $m;
+            'modules' => $modules->map(function (MemberModule $m) use ($accessStartAt, $now, $user) {
+                $effective = ($m->source_member_module_id)
+                    ? $this->resolveContentModuleForWrapper($m)
+                    : $m;
 
-                    return [
-                        'id' => $m->id,
-                        'title' => $m->title,
-                        'thumbnail' => $m->thumbnail,
-                        'show_title_on_cover' => $m->show_title_on_cover ?? true,
-                        ...$this->moduleLockPayload($effective, $accessStartAt, $now),
-                        'lessons' => $effective->lessons->map(fn (MemberLesson $l) => [
-                            'id' => $l->id,
-                            'title' => $l->title,
-                            'type' => $l->type,
-                            'duration_seconds' => $l->duration_seconds,
-                            'is_completed' => $this->isLessonCompleted($user->id, $l->id),
-                            ...$this->lessonLockPayload($l, $effective, $accessStartAt, $now),
-                        ])->values()->all(),
-                    ];
-                })->values()->all(),
-            ])->values()->all(),
+                return [
+                    'id' => $m->id,
+                    'title' => $m->title,
+                    'thumbnail' => $m->thumbnail,
+                    'cover_mode' => $m->cover_mode ?? 'vertical',
+                    'show_title_on_cover' => $m->show_title_on_cover ?? true,
+                    ...$this->moduleLockPayload($effective, $accessStartAt, $now),
+                    'lessons' => $effective->lessons->map(fn (MemberLesson $l) => [
+                        'id' => $l->id,
+                        'title' => $l->title,
+                        'type' => $l->type,
+                        'duration_seconds' => $l->duration_seconds,
+                        'is_completed' => $this->isLessonCompleted($user->id, $l->id),
+                        ...$this->lessonLockPayload($l, $effective, $accessStartAt, $now),
+                    ])->values()->all(),
+                ];
+            })->values()->all(),
             'base_url' => $this->baseUrlForRequest($product, $request),
             'slug' => $slug,
             ...$this->pushProps($product),
@@ -257,6 +300,12 @@ class MemberAreaAppController extends Controller
         $currentLessonData = null;
         if ($currentLesson) {
             $this->progressService->ensureLessonStarted($currentLesson, $user);
+            $this->logMemberActivity($request, $product, $user, 'member_area.lesson_view', [
+                'lesson_id' => $currentLesson->id,
+                'lesson_product_id' => $currentLesson->product_id,
+                'module_id' => $module->id,
+                'embedded' => (bool) $module->source_member_module_id,
+            ]);
             $currentLessonData = [
                 'id' => $currentLesson->id,
                 'title' => $currentLesson->title,
@@ -281,19 +330,40 @@ class MemberAreaAppController extends Controller
 
         $progressPercent = $this->progressService->completionPercent($product, $user);
 
-        $sections = $product->memberSections()->with('modules')->orderBy('position')->get();
-        $sectionsPayload = $sections->map(fn (MemberSection $s) => [
-            'id' => $s->id,
-            'title' => $s->title,
-            'cover_mode' => $s->cover_mode ?? 'vertical',
-            'modules' => $s->modules->map(fn ($m) => [
-                'id' => $m->id,
-                'title' => $m->title,
-                'thumbnail' => $m->thumbnail,
-                'show_title_on_cover' => $m->show_title_on_cover ?? true,
-                ...$this->moduleLockPayload($m, $accessStartAt, $now),
-            ])->values()->all(),
-        ])->values()->all();
+        $modulesPayload = $product->memberModules()
+            ->with(['lessons' => fn ($q) => $q->orderBy('position')])
+            ->orderBy('position')
+            ->get()
+            ->map(function (MemberModule $m) use ($user, $accessStartAt, $now) {
+                $coverMode = $m->cover_mode ?? 'vertical';
+                $lessonsPayload = $m->lessons->map(function (MemberLesson $l) use ($user, $m, $accessStartAt, $now) {
+                    $payload = [
+                        'id' => $l->id,
+                        'title' => $l->title,
+                        'type' => $l->type,
+                        'is_completed' => $this->isLessonCompleted($user->id, $l->id),
+                        ...$this->lessonLockPayload($l, $m, $accessStartAt, $now),
+                    ];
+                    if (in_array($l->type, [MemberLesson::TYPE_PDF, MemberLesson::TYPE_PDF_PRESENTATION, MemberLesson::TYPE_PDF_READER], true)) {
+                        $pages = $this->lessonPagesCountFromContentFiles($l->content_files);
+                        if ($pages !== null) {
+                            $payload['pages_count'] = $pages;
+                        }
+                    }
+
+                    return $payload;
+                })->values()->all();
+
+                return [
+                    'id' => $m->id,
+                    'title' => $m->title,
+                    'thumbnail' => $m->thumbnail,
+                    'show_title_on_cover' => $m->show_title_on_cover ?? true,
+                    'cover_mode' => $coverMode,
+                    'lessons' => $lessonsPayload,
+                    ...$this->moduleLockPayload($m, $accessStartAt, $now),
+                ];
+            })->values()->all();
 
         $config = $product->member_area_config;
         $commentsEnabled = (bool) ($config['comments_enabled'] ?? false);
@@ -328,7 +398,8 @@ class MemberAreaAppController extends Controller
             'module' => [
                 'id' => $module->id,
                 'title' => $module->title,
-                'section' => $module->section ? ['id' => $module->section->id, 'title' => $module->section->title] : null,
+                'thumbnail' => $module->thumbnail,
+                'cover_mode' => $module->cover_mode ?? ($module->section?->cover_mode ?? 'vertical'),
             ],
             'lessons' => $lessons,
             'current_lesson' => $currentLessonData,
@@ -337,7 +408,7 @@ class MemberAreaAppController extends Controller
                 'completed' => $this->progressService->completedLessonsCount($product, $user),
                 'total' => $this->progressService->totalLessonsCount($product),
             ],
-            'sections' => $sectionsPayload,
+            'modules' => $modulesPayload,
             'comments_enabled' => $commentsEnabled,
             'comments_require_approval' => $commentsRequireApproval,
             'lesson_comments' => $lessonComments,
@@ -345,9 +416,10 @@ class MemberAreaAppController extends Controller
         ]);
     }
 
-    public function lesson(Request $request, string $slug, MemberLesson $lesson): Response|RedirectResponse
+    public function lesson(Request $request, string $slug, MemberLesson $lesson): RedirectResponse
     {
         $product = $this->getProduct($request);
+        $routeSlug = $product->checkout_slug ?: $slug;
         $user = $request->user();
         $lesson->load('module');
         $wrapper = $this->findWrapperForEmbeddedLesson($lesson, $product);
@@ -368,7 +440,7 @@ class MemberAreaAppController extends Controller
         if ($effectiveModule) {
             $moduleLock = $this->moduleLockPayload($effectiveModule, $accessStartAt, $now);
             if (($moduleLock['is_locked'] ?? false) === true) {
-                return redirect()->route($this->memberAreaModulosRouteName($request), ['slug' => $slug])
+                return redirect()->route($this->memberAreaModulosRouteName($request), ['slug' => $routeSlug])
                     ->with('error', $moduleLock['lock_message'] ?? 'Módulo ainda não liberado.');
             }
         }
@@ -376,87 +448,30 @@ class MemberAreaAppController extends Controller
         if (($lessonLock['is_locked'] ?? false) === true) {
             $moduleRouteId = $wrapper?->id ?? $lesson->module?->id;
             if ($moduleRouteId) {
-                return redirect()->route($this->memberAreaModuleRouteName($request), ['slug' => $slug, 'module' => $moduleRouteId])
+                return redirect()->route($this->memberAreaModuleRouteName($request), ['slug' => $routeSlug, 'module' => $moduleRouteId])
                     ->with('error', $lessonLock['lock_message'] ?? 'Aula ainda não liberada.');
             }
-            return redirect()->route($this->memberAreaModulosRouteName($request), ['slug' => $slug])
+            return redirect()->route($this->memberAreaModulosRouteName($request), ['slug' => $routeSlug])
                 ->with('error', $lessonLock['lock_message'] ?? 'Aula ainda não liberada.');
         }
         $this->progressService->ensureLessonStarted($lesson, $user);
 
+        $moduleRouteId = $wrapper?->id ?? $lesson->module?->id;
         $this->logMemberActivity($request, $product, $user, 'member_area.lesson_view', [
             'lesson_id' => $lesson->id,
             'lesson_product_id' => $lesson->product_id,
-            'module_id' => $lesson->module?->id,
+            'module_id' => $moduleRouteId,
             'embedded' => $wrapper !== null,
         ]);
 
-        $sectionPayload = null;
-        if ($wrapper !== null) {
-            $wrapper->loadMissing('section');
-            $sectionPayload = $wrapper->section ? ['id' => $wrapper->section->id, 'title' => $wrapper->section->title] : null;
-        } elseif ($lesson->module && $lesson->module->section) {
-            $sectionPayload = ['id' => $lesson->module->section->id, 'title' => $lesson->module->section->title];
+        if ($moduleRouteId) {
+            return redirect()->route(
+                $this->memberAreaModuleRouteName($request),
+                ['slug' => $routeSlug, 'module' => $moduleRouteId, 'aula' => $lesson->id]
+            );
         }
 
-        $lessonPayload = [
-            'id' => $lesson->id,
-            'title' => $lesson->title,
-            'type' => $lesson->type,
-            'content_url' => $lesson->content_url,
-            'content_files' => $lesson->content_files,
-            'link_title' => $lesson->link_title,
-            'content_text' => \App\Support\HtmlSanitizer::sanitize($lesson->content_text),
-            'duration_seconds' => $lesson->duration_seconds,
-            'is_completed' => $this->isLessonCompleted($user->id, $lesson->id),
-            'module' => $wrapper !== null
-                ? ['id' => $wrapper->id, 'title' => $wrapper->title]
-                : ($lesson->module ? ['id' => $lesson->module->id, 'title' => $lesson->module->title] : null),
-            'section' => $sectionPayload,
-            'watermark_enabled' => (bool) ($lesson->watermark_enabled ?? false),
-        ];
-        if ($lessonPayload['watermark_enabled']) {
-            $lessonPayload['student'] = $this->getStudentWatermarkData($user, $product);
-        }
-        if ($lesson->type === MemberLesson::TYPE_PDF_READER) {
-            $lessonPayload = array_merge($lessonPayload, $this->pdfReaderLessonExtras($lesson, $user));
-        }
-        $config = $product->member_area_config;
-        $commentsEnabled = (bool) ($config['comments_enabled'] ?? false);
-        $commentsRequireApproval = (bool) ($config['comments_require_approval'] ?? true);
-        $lessonComments = [];
-        if ($commentsEnabled) {
-            $lessonComments = MemberComment::forProduct($product->id)
-                ->where('member_lesson_id', $lesson->id)
-                ->status(MemberComment::STATUS_APPROVED)
-                ->with('user:id,name,avatar')
-                ->latest()
-                ->get()
-                ->map(fn (MemberComment $c) => [
-                    'id' => $c->id,
-                    'content' => $c->content,
-                    'user' => $c->user ? [
-                        'id' => $c->user->id,
-                        'name' => $c->user->name,
-                        'avatar_url' => $c->user->avatar ? (new StorageService($product->tenant_id))->url($c->user->avatar) : null,
-                    ] : null,
-                    'created_at' => $c->created_at->toIso8601String(),
-                ])
-                ->values()
-                ->all();
-        }
-
-        return Inertia::render('MemberAreaApp/Lesson', [
-            'product' => $this->productToArray($product),
-            'config' => $product->member_area_config,
-            'lesson' => $lessonPayload,
-            'base_url' => $this->baseUrlForRequest($product, $request),
-            'slug' => $slug,
-            'comments_enabled' => $commentsEnabled,
-            'comments_require_approval' => $commentsRequireApproval,
-            'lesson_comments' => $lessonComments,
-            ...$this->pushProps($product),
-        ] + $this->gamificationProps($product, $user));
+        return redirect()->route($this->memberAreaModulosRouteName($request), ['slug' => $routeSlug]);
     }
 
     /**
@@ -742,6 +757,10 @@ class MemberAreaAppController extends Controller
     public function comunidade(Request $request, string $slug): Response|\Illuminate\Http\RedirectResponse
     {
         $product = $this->getProduct($request);
+        $tenantId = $product->tenant_id ? (int) $product->tenant_id : null;
+        if (\App\Support\StudentAreaSettings::communityEnabled($tenantId)) {
+            return redirect()->route('student-hub.comunidade');
+        }
         $user = $request->user();
         $pages = $product->memberCommunityPages()->orderBy('position')->get();
         $defaultPage = $pages->firstWhere('is_default', true);
@@ -949,17 +968,20 @@ class MemberAreaAppController extends Controller
     public function certificado(Request $request, string $slug): Response|RedirectResponse
     {
         $product = $this->getProduct($request);
+        $tenantId = $product->tenant_id ? (int) $product->tenant_id : null;
+        if (\App\Support\StudentAreaSettings::certificateEnabled($tenantId)) {
+            return redirect()->route('student-hub.certificados');
+        }
         $user = $request->user();
-        $config = $product->member_area_config;
-        $certConfig = $config['certificate'] ?? [];
+        $certConfig = \App\Support\StudentAreaSettings::certificateConfig($tenantId);
 
         if (empty($certConfig['enabled'])) {
-            return redirect()->route('member-area-app.show', $slug)
+            return redirect()->route($this->memberAreaModulosRouteName($request), ['slug' => $product->checkout_slug ?: $slug])
                 ->with('error', 'O certificado não está habilitado para este curso.');
         }
 
         $progressPercent = $this->progressService->completionPercent($product, $user);
-        $requiredPercent = (int) ($certConfig['completion_percent'] ?? 100);
+        $requiredPercent = \App\Support\StudentAreaSettings::certificateCompletionPercentForProduct($product);
         $issued = MemberCertificateIssued::where('user_id', $user->id)
             ->where('product_id', $product->id)
             ->first();
@@ -1087,8 +1109,7 @@ class MemberAreaAppController extends Controller
     /** @return array{gamification_achievements: array} */
     private function gamificationProps(Product $product, User $user): array
     {
-        $config = $product->member_area_config;
-        $gamification = $config['gamification'] ?? [];
+        $gamification = $this->gamificationService->gamificationConfigForProduct($product);
         if (empty($gamification['enabled'])) {
             return ['gamification_achievements' => []];
         }
@@ -1203,11 +1224,7 @@ class MemberAreaAppController extends Controller
         $slug = $slug !== '' ? $slug : (string) ($host->checkout_slug ?? '');
 
         if (! $user instanceof User) {
-            // In host-based member areas, GET /login is handled by the platform login controller.
-            $isHost = str_ends_with(($request->route()?->getName() ?? ''), '.host');
-            return $isHost
-                ? redirect()->to('/login')->with('error', 'Faça login para acessar a área de membros.')
-                : redirect()->route('member-area.login', ['slug' => $slug])->with('error', 'Faça login para acessar a área de membros.');
+            return redirect()->route('login')->with('error', 'Faça login para acessar a área de membros.');
         }
 
         $relatedId = ctype_digit($relatedProduct) ? (int) $relatedProduct : $relatedProduct;
@@ -1257,10 +1274,7 @@ class MemberAreaAppController extends Controller
         $slug = $slug !== '' ? $slug : (string) ($host->checkout_slug ?? '');
 
         if (! $user instanceof User) {
-            $isHost = str_ends_with(($request->route()?->getName() ?? ''), '.host');
-            return $isHost
-                ? redirect()->to('/login')->with('error', 'Faça login para acessar a área de membros.')
-                : redirect()->route('member-area.login', ['slug' => $slug])->with('error', 'Faça login para acessar a área de membros.');
+            return redirect()->route('login')->with('error', 'Faça login para acessar a área de membros.');
         }
 
         // 1) Tenta resolver via card/wrapper do próprio host (fonte mais confiável do contexto "paid/free")

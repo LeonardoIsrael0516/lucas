@@ -20,6 +20,7 @@ import {
     Mail,
     CodeXml,
     LifeBuoy,
+    GraduationCap,
 } from 'lucide-vue-next';
 import { useSidebar } from '@/composables/useSidebar';
 import ConquistasWidget from '@/components/layout/ConquistasWidget.vue';
@@ -96,6 +97,7 @@ const navItems = computed(() => {
 
     if (canView('api_pagamentos.view')) items.push({ name: 'API Pagamentos', href: '/aplicacoes-api', icon: CodeXml });
     items.push({ separator: true });
+    if (canView('configuracoes.view')) items.push({ name: 'Área do aluno', href: '/area-aluno/personalizacao', icon: GraduationCap });
     if (canView('configuracoes.view')) items.push({ name: 'Configurações', href: '/configuracoes', icon: Settings });
 
     if (page.props.auth?.user?.role === 'admin' || page.props.auth?.user?.role === 'infoprodutor') {

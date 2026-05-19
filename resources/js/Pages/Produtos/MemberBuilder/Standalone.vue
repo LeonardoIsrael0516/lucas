@@ -7,7 +7,6 @@ import Toggle from '@/components/ui/Toggle.vue';
 import {
     Palette,
     LayoutList,
-    LogIn,
     Layers,
     ShoppingBag,
     Users,
@@ -66,19 +65,13 @@ function memberBuilderImageUploadError(e, fallbackLabel = 'imagem') {
 
 const csrfToken = () => document.querySelector('meta[name="csrf-token"]')?.content ?? '';
 
-const activeTab = ref('aparencia');
+const activeTab = ref('modulos');
 const processing = ref(false);
 const heroDesktopUploading = ref(false);
 const heroDesktopFileInput = ref(null);
 const certBgFileInput = ref(null);
 const heroMobileUploading = ref(false);
 const heroMobileFileInput = ref(null);
-const headerLogoUploading = ref(false);
-const headerLogoFileInput = ref(null);
-const loginLogoUploading = ref(false);
-const loginLogoFileInput = ref(null);
-const loginBackgroundUploading = ref(false);
-const loginBackgroundFileInput = ref(null);
 const faviconUploading = ref(false);
 const faviconFileInput = ref(null);
 
@@ -138,18 +131,6 @@ const defaultConfig = () => ({
     header: { logo_url: '', ...props.produto.member_area_config?.header },
     logos: props.produto.member_area_config?.logos ?? {},
     sidebar: { collapsible: false, items: [], ...props.produto.member_area_config?.sidebar },
-    login: {
-        title: '',
-        subtitle: '',
-        primary_color: '#0ea5e9',
-        background_color: '#18181b',
-        logo: '',
-        background_image: '',
-        password_mode: props.produto.member_area_config?.login?.password_mode ?? 'auto',
-        default_password: props.produto.member_area_config?.login?.default_password ?? '',
-        login_without_password: props.produto.member_area_config?.login?.login_without_password ?? false,
-        ...props.produto.member_area_config?.login,
-    },
     pwa: { name: '', short_name: '', theme_color: '#0ea5e9', push_enabled: false, ...props.produto.member_area_config?.pwa },
     certificate: { enabled: false, title: '', completion_percent: 100, signature_text: '', font_family: 'sans-serif', duration_text: '', platform_name: '', primary_color: '', background_image_url: '', background_overlay_enabled: false, background_overlay_color: '#000000', background_overlay_opacity: 50, text_color: '', title_color: '', signature_font_family: 'Dancing Script', print_format: 'A4', ...props.produto.member_area_config?.certificate },
     community_enabled: props.produto.member_area_config?.community_enabled ?? false,
@@ -166,32 +147,14 @@ const configForm = reactive({
 });
 
 const tabs = [
-    { id: 'aparencia', label: 'Aparência', icon: Palette, hasPreview: true, previewMode: 'area' },
-    { id: 'header', label: 'Header', icon: LayoutList, hasPreview: true, previewMode: 'area' },
-    { id: 'modulos', label: 'Módulos', icon: Layers, hasPreview: true, previewMode: 'area' },
+    { id: 'modulos', label: 'Módulos', icon: Layers, hasPreview: false },
     { id: 'turmas', label: 'Turmas', icon: Users, hasPreview: false },
     { id: 'progresso', label: 'Progresso', icon: BarChart3, hasPreview: false },
     { id: 'comentarios', label: 'Comentários', icon: MessageSquare, hasPreview: false },
-    { id: 'comunidade', label: 'Comunidade', icon: Globe, hasPreview: true, previewMode: 'comunidade' },
-    { id: 'certificado', label: 'Certificado', icon: Award, hasPreview: true, previewMode: 'certificate' },
-    { id: 'gamificacao', label: 'Gamificação', icon: Trophy, hasPreview: false },
-    { id: 'login', label: 'Login', icon: LogIn, hasPreview: true, previewMode: 'login' },
-    { id: 'pwa', label: 'PWA e URL', icon: Smartphone, hasPreview: false },
 ];
 
-const loginAccessMode = computed({
-    get() {
-        const login = configForm.member_area_config?.login ?? {};
-        return login.login_without_password ? 'email_only' : (login.password_mode || 'auto');
-    },
-    set(value) {
-        configForm.member_area_config.login.login_without_password = value === 'email_only';
-        configForm.member_area_config.login.password_mode = value === 'email_only' ? 'auto' : value;
-    },
-});
-
 const currentTab = computed(() => tabs.find((t) => t.id === activeTab.value));
-const showPreview = computed(() => currentTab.value?.hasPreview ?? false);
+const showPreview = computed(() => false);
 const previewMode = computed(() => currentTab.value?.previewMode ?? 'area');
 
 const tabIds = tabs.map((t) => t.id);
@@ -260,16 +223,6 @@ onMounted(() => {
 watch(activeTab, (id) => {
     try { localStorage.setItem(`member_builder_tab_${props.produto.id}`, id); } catch (_) {}
 });
-
-watch(
-    [activeTab, () => props.produto.sections],
-    () => {
-        if (activeTab.value === 'modulos' && (props.produto.sections?.length ?? 0) > 0) {
-            expandAllModulos();
-        }
-    },
-    { immediate: true }
-);
 
 const headerItems = computed({
     get: () => {
@@ -545,15 +498,19 @@ function pdfLessonFileLabel(type) {
     return 'Material';
 }
 
-const modulosSelectedModule = computed(() => {
-    const id = modulosSelectedModuleId.value;
+function findModuleById(id) {
     if (!id) return null;
-    for (const s of props.produto.sections ?? []) {
-        const mod = s.modules?.find((m) => m.id === id);
-        if (mod) return mod;
-    }
-    return null;
-});
+    return (props.produto.modules ?? []).find((m) => m.id === id) ?? null;
+}
+
+function moduleKind(mod) {
+    if (!mod) return 'courses';
+    if (mod.external_url) return 'external_links';
+    if (mod.related_product_id) return 'products';
+    return 'courses';
+}
+
+const modulosSelectedModule = computed(() => findModuleById(modulosSelectedModuleId.value));
 
 function selectModuleForAulas(moduleId) {
     modulosSelectedModuleId.value = moduleId;
@@ -716,17 +673,22 @@ function toggleModule(moduleId) {
 }
 
 function expandAllModulos() {
-    const sections = props.produto.sections ?? [];
-    expandedSections.value = new Set(sections.map((s) => s.id));
-    expandedModules.value = new Set(
-        sections.flatMap((s) => (s.modules ?? []).map((m) => m.id))
-    );
+    expandedModules.value = new Set((props.produto.modules ?? []).map((m) => m.id));
 }
 
 function collapseAllModulos() {
-    expandedSections.value = new Set();
     expandedModules.value = new Set();
 }
+
+watch(
+    [activeTab, () => props.produto.modules],
+    () => {
+        if (activeTab.value === 'modulos' && (props.produto.modules?.length ?? 0) > 0) {
+            expandAllModulos();
+        }
+    },
+    { immediate: true }
+);
 
 function startEditSection(sectionId) {
     editingSectionId.value = sectionId;
@@ -822,8 +784,7 @@ async function saveModuleTitle() {
     const id = editingModuleId.value;
     if (!id) return;
     const mod = editingModule.value;
-    const section = props.produto.sections?.find((s) => s.modules?.some((m) => m.id === id));
-    const sectionType = section?.section_type ?? 'courses';
+    const sectionType = moduleKind(mod);
     const payload = { title: editingModuleTitle.value };
     if (sectionType === 'courses') {
         payload.show_title_on_cover = editingModuleShowTitleOnCover.value;
@@ -858,26 +819,14 @@ async function setModuleShowTitleOnCover(value) {
     if (!id) return;
     try {
         await axios.put(`${base.value}/modules/${id}`, { show_title_on_cover: value }, { headers: headers() });
-        const mod = props.produto.sections?.flatMap((s) => s.modules ?? []).find((m) => m.id === id);
+        const mod = findModuleById(id);
         if (mod) mod.show_title_on_cover = value;
     } catch (_) {}
 }
 
-const editingModule = computed(() => {
-    const id = editingModuleId.value;
-    if (!id) return null;
-    for (const s of props.produto.sections ?? []) {
-        const mod = s.modules?.find((m) => m.id === id);
-        if (mod) return mod;
-    }
-    return null;
-});
+const editingModule = computed(() => findModuleById(editingModuleId.value));
 
-const editingModuleSection = computed(() => {
-    const id = editingModuleId.value;
-    if (!id) return null;
-    return props.produto.sections?.find((s) => s.modules?.some((m) => m.id === id)) ?? null;
-});
+const editingModuleCoverMode = computed(() => editingModule.value?.cover_mode ?? 'vertical');
 
 const moduleThumbnailUploading = ref(false);
 const moduleThumbnailFileInput = ref(null);
@@ -1027,47 +976,6 @@ function removeCertBg() {
     saveConfig();
 }
 
-async function onHeaderLogoChange(event) {
-    const file = event.target?.files?.[0];
-    if (!file || !file.type.startsWith('image/')) return;
-    headerLogoUploading.value = true;
-    try {
-        await doUpload(file, (url) => {
-            if (!configForm.member_area_config.header) configForm.member_area_config.header = { logo_url: '' };
-            configForm.member_area_config.header.logo_url = url;
-        });
-    } catch (e) {
-        alert(memberBuilderImageUploadError(e, 'logo'));
-    } finally {
-        headerLogoUploading.value = false;
-        if (headerLogoFileInput.value) headerLogoFileInput.value.value = '';
-    }
-}
-
-function removeHeaderLogo() {
-    if (configForm.member_area_config.header) configForm.member_area_config.header.logo_url = '';
-    saveConfig();
-}
-
-async function onLoginLogoChange(event) {
-    const file = event.target?.files?.[0];
-    if (!file || !file.type.startsWith('image/')) return;
-    loginLogoUploading.value = true;
-    try {
-        await doUpload(file, (url) => { configForm.member_area_config.login.logo = url; });
-    } catch (e) {
-        alert(memberBuilderImageUploadError(e, 'logo'));
-    } finally {
-        loginLogoUploading.value = false;
-        if (loginLogoFileInput.value) loginLogoFileInput.value.value = '';
-    }
-}
-
-function removeLoginLogo() {
-    configForm.member_area_config.login.logo = '';
-    saveConfig();
-}
-
 async function onFaviconChange(event) {
     const file = event.target?.files?.[0];
     if (!file || !file.type.startsWith('image/')) return;
@@ -1087,25 +995,6 @@ async function onFaviconChange(event) {
 
 function removeFavicon() {
     if (configForm.member_area_config.logos) configForm.member_area_config.logos.favicon = '';
-    saveConfig();
-}
-
-async function onLoginBackgroundChange(event) {
-    const file = event.target?.files?.[0];
-    if (!file || !file.type.startsWith('image/')) return;
-    loginBackgroundUploading.value = true;
-    try {
-        await doUpload(file, (url) => { configForm.member_area_config.login.background_image = url; });
-    } catch (e) {
-        alert(memberBuilderImageUploadError(e, 'imagem'));
-    } finally {
-        loginBackgroundUploading.value = false;
-        if (loginBackgroundFileInput.value) loginBackgroundFileInput.value.value = '';
-    }
-}
-
-function removeLoginBackground() {
-    configForm.member_area_config.login.background_image = '';
     saveConfig();
 }
 
@@ -1229,11 +1118,10 @@ async function deleteSection(sectionId) {
         },
     });
 }
-function openModuleModal(sectionId) {
-    const section = props.produto.sections?.find((s) => s.id === sectionId);
-    moduleModalSectionId.value = sectionId;
-    moduleModalSectionType.value = section?.section_type ?? 'courses';
-    moduleModalCoverMode.value = section?.cover_mode ?? 'vertical';
+function openModuleModal() {
+    moduleModalSectionId.value = null;
+    moduleModalSectionType.value = 'courses';
+    moduleModalCoverMode.value = 'vertical';
     moduleModalTitle.value = '';
     moduleModalShowTitleOnCover.value = true;
     moduleModalRelatedProductId.value = null;
@@ -1269,9 +1157,8 @@ function closeModuleModal() {
 }
 
 async function confirmNewModule() {
-    const sectionId = moduleModalSectionId.value;
     const title = moduleModalTitle.value?.trim();
-    if (!title || !sectionId) return;
+    if (!title) return;
     const sectionType = moduleModalSectionType.value;
     if (sectionType === 'products' && !moduleModalRelatedProductId.value) return;
     if (sectionType === 'external_links' && !moduleModalExternalUrl.value?.trim()) return;
@@ -1299,7 +1186,7 @@ async function confirmNewModule() {
             payload.external_url = moduleModalExternalUrl.value?.trim() ?? '';
             payload.show_title_on_cover = moduleModalShowTitleOnCover.value;
         }
-        const { data } = await axios.post(`${base.value}/sections/${sectionId}/modules`, payload, { headers: headers() });
+        const { data } = await axios.post(`${base.value}/modules`, payload, { headers: headers() });
         const imported = Array.isArray(data?.modules) && data.modules.length ? data.modules : data?.module ? [data.module] : [];
         if (!imported.length) {
             reload();
@@ -1317,16 +1204,10 @@ async function confirmNewModule() {
                 imported[0] = newModule;
             }
         }
-        const section = props.produto.sections?.find((s) => s.id === sectionId);
-        if (section) {
-            if (!section.modules) section.modules = [];
-            for (const newModule of imported) {
-                section.modules.push(newModule);
-            }
-            expandedSections.value = new Set([...expandedSections.value, sectionId]);
-            for (const newModule of imported) {
-                expandedModules.value = new Set([...expandedModules.value, newModule.id]);
-            }
+        if (!props.produto.modules) props.produto.modules = [];
+        for (const newModule of imported) {
+            props.produto.modules.push(newModule);
+            expandedModules.value = new Set([...expandedModules.value, newModule.id]);
         }
         previewKey.value++;
         closeModuleModal();
@@ -1367,12 +1248,9 @@ async function duplicateModule(moduleId) {
             reload();
             return;
         }
-        const section = props.produto.sections?.find((s) => (s.modules ?? []).some((m) => m.id === moduleId));
-        if (section) {
-            if (!section.modules) section.modules = [];
-            section.modules.push(mod);
-            expandedSections.value = new Set([...expandedSections.value, section.id]);
-        }
+        if (!props.produto.modules) props.produto.modules = [];
+        props.produto.modules.push(mod);
+        expandedModules.value = new Set([...expandedModules.value, mod.id]);
         previewKey.value++;
     } catch (_) {
         reload();
@@ -1387,7 +1265,7 @@ async function duplicateLesson(lessonId) {
             reload();
             return;
         }
-        const module = props.produto.sections?.flatMap((s) => s.modules ?? []).find((m) => (m.lessons ?? []).some((l) => l.id === lessonId));
+        const module = (props.produto.modules ?? []).find((m) => (m.lessons ?? []).some((l) => l.id === lessonId));
         if (module) {
             if (!module.lessons) module.lessons = [];
             module.lessons.push(lesson);
@@ -1758,16 +1636,8 @@ const inputClass = 'block w-full rounded-lg border border-zinc-300 bg-white px-3
         </header>
 
         <!-- Conteúdo: sidebar config + preview (preview só em lg+) -->
-        <div :class="['flex min-h-0 flex-1 flex-col overflow-hidden', showPreview ? 'lg:flex-row' : '']">
-            <aside
-                :class="[
-                    'flex min-h-0 min-w-0 flex-col border-b border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900',
-                    'lg:shrink-0',
-                    showPreview ? 'lg:w-80 lg:border-b-0 lg:border-r lg:overflow-y-auto' : 'flex-1 w-full overflow-x-hidden',
-                    activeTab === 'modulos' && showPreview ? 'lg:w-[44rem]' : '',
-                    activeTab === 'modulos' && !showPreview ? 'flex-1 overflow-hidden' : '',
-                ]"
-            >
+        <div class="flex min-h-0 flex-1 flex-col overflow-hidden">
+            <aside class="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden border-b border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
                 <!-- Container rolável: garante scroll no mobile (altura limitada) -->
                 <div
                     class="min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden"
@@ -1775,37 +1645,11 @@ const inputClass = 'block w-full rounded-lg border border-zinc-300 bg-white px-3
                 >
                 <div class="min-w-0 p-4">
                     <template v-if="activeTab === 'aparencia'">
-                        <h2 class="mb-4 text-sm font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Tema e hero</h2>
+                        <h2 class="mb-4 text-sm font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Hero</h2>
                         <div class="space-y-4">
-                            <div>
-                                <label class="mb-1 block text-xs font-medium text-zinc-600 dark:text-zinc-400">Logo do header</label>
-                                <input
-                                    ref="headerLogoFileInput"
-                                    type="file"
-                                    accept="image/*"
-                                    class="hidden"
-                                    @change="onHeaderLogoChange"
-                                />
-                                <div class="flex flex-col gap-2">
-                                    <div v-if="configForm.member_area_config.header?.logo_url" class="relative">
-                                        <img :src="configForm.member_area_config.header.logo_url" alt="Logo" class="h-14 w-auto max-w-[140px] rounded object-contain" />
-                                        <div class="mt-1 flex gap-2">
-                                            <Button type="button" size="sm" variant="outline" :disabled="headerLogoUploading" @click="headerLogoFileInput?.click()">
-                                                Trocar
-                                            </Button>
-                                            <Button type="button" size="sm" variant="ghost" class="text-red-600" :disabled="headerLogoUploading" @click="removeHeaderLogo">
-                                                Remover
-                                            </Button>
-                                        </div>
-                                    </div>
-                                    <template v-else>
-                                        <Button type="button" variant="outline" size="sm" :disabled="headerLogoUploading" @click="headerLogoFileInput?.click()">
-                                            {{ headerLogoUploading ? 'Enviando…' : 'Enviar logo do header' }}
-                                        </Button>
-                                    </template>
-                                </div>
-                                <p class="mt-1 text-xs text-zinc-500 dark:text-zinc-400">Tamanho ideal: 180×40 px (ou proporção similar). PNG ou SVG com fundo transparente. Máx. {{ uploadLimits.image_max_mb }} MB.</p>
-                            </div>
+                            <p class="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-900/40 dark:bg-amber-950/30 dark:text-amber-100">
+                                Cores e logos da área de membros são globais e vêm do White Label.
+                            </p>
                             <div>
                                 <label class="mb-1 block text-xs font-medium text-zinc-600 dark:text-zinc-400">Favicon (ícone da aba do navegador)</label>
                                 <input ref="faviconFileInput" type="file" accept="image/*" class="hidden" @change="onFaviconChange" />
@@ -1822,13 +1666,6 @@ const inputClass = 'block w-full rounded-lg border border-zinc-300 bg-white px-3
                                     </Button>
                                 </div>
                                 <p class="mt-1 text-xs text-zinc-500 dark:text-zinc-400">Usado na aba do navegador e no PWA. Tamanho ideal: 192×192 ou 512×512 px. Máx. {{ uploadLimits.image_max_mb }} MB.</p>
-                            </div>
-                            <div>
-                                <input v-model="configForm.member_area_config.theme.primary" type="color" class="h-9 w-full cursor-pointer rounded-lg border dark:border-zinc-600" />
-                            </div>
-                            <div>
-                                <label class="mb-1 block text-xs font-medium text-zinc-600 dark:text-zinc-400">Fundo</label>
-                                <input v-model="configForm.member_area_config.theme.background" type="color" class="h-9 w-full cursor-pointer rounded-lg border dark:border-zinc-600" />
                             </div>
                             <div>
                                 <label class="mb-1 block text-xs font-medium text-zinc-600 dark:text-zinc-400">Banner do hero — Desktop</label>
@@ -1943,97 +1780,43 @@ const inputClass = 'block w-full rounded-lg border border-zinc-300 bg-white px-3
                         <Button type="button" class="mt-4" @click="saveConfig" :disabled="processing">Salvar</Button>
                     </template>
 
-                    <template v-else-if="activeTab === 'login'">
-                        <h2 class="mb-4 text-sm font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Tela de login</h2>
-                        <div class="space-y-4">
-                            <div>
-                                <label class="mb-1 block text-xs font-medium text-zinc-600 dark:text-zinc-400">Logo</label>
-                                <input ref="loginLogoFileInput" type="file" accept="image/*" class="hidden" @change="onLoginLogoChange" />
-                                <div v-if="configForm.member_area_config.login.logo" class="flex items-center gap-2">
-                                    <img :src="configForm.member_area_config.login.logo" alt="Logo login" class="h-14 w-auto max-w-[140px] rounded-lg object-contain bg-zinc-100 dark:bg-zinc-800" />
-                                    <div class="flex gap-2">
-                                        <Button type="button" size="sm" variant="outline" :disabled="loginLogoUploading" @click="loginLogoFileInput?.click()">Trocar</Button>
-                                        <Button type="button" size="sm" variant="outline" @click="removeLoginLogo">Remover</Button>
-                                    </div>
-                                </div>
-                                <Button v-else type="button" size="sm" variant="outline" :disabled="loginLogoUploading" @click="loginLogoFileInput?.click()">
-                                    Enviar logo
-                                </Button>
-                            </div>
-                            <div>
-                                <label class="mb-1 block text-xs font-medium text-zinc-600 dark:text-zinc-400">Imagem de fundo</label>
-                                <input ref="loginBackgroundFileInput" type="file" accept="image/*" class="hidden" @change="onLoginBackgroundChange" />
-                                <div v-if="configForm.member_area_config.login.background_image" class="space-y-2">
-                                    <img :src="configForm.member_area_config.login.background_image" alt="Fundo login" class="h-24 w-full rounded-lg object-cover bg-zinc-100 dark:bg-zinc-800" />
-                                    <div class="flex gap-2">
-                                        <Button type="button" size="sm" variant="outline" :disabled="loginBackgroundUploading" @click="loginBackgroundFileInput?.click()">Trocar</Button>
-                                        <Button type="button" size="sm" variant="outline" @click="removeLoginBackground">Remover</Button>
-                                    </div>
-                                </div>
-                                <Button v-else type="button" size="sm" variant="outline" :disabled="loginBackgroundUploading" @click="loginBackgroundFileInput?.click()">
-                                    Enviar imagem de fundo
-                                </Button>
-                            </div>
-                            <div>
-                                <label class="mb-1 block text-xs font-medium text-zinc-600 dark:text-zinc-400">Cor de fundo (sem imagem)</label>
-                                <div class="flex items-center gap-2">
-                                    <input v-model="configForm.member_area_config.login.background_color" type="color" class="h-9 w-20 cursor-pointer rounded-lg border dark:border-zinc-600" />
-                                    <input v-model="configForm.member_area_config.login.background_color" type="text" :class="inputClass" class="flex-1 font-mono text-sm" placeholder="#18181b" />
-                                </div>
-                            </div>
-                            <div>
-                                <label class="mb-1 block text-xs font-medium text-zinc-600 dark:text-zinc-400">Título</label>
-                                <input v-model="configForm.member_area_config.login.title" type="text" :class="inputClass" placeholder="Área de Membros" />
-                            </div>
-                            <div>
-                                <label class="mb-1 block text-xs font-medium text-zinc-600 dark:text-zinc-400">Subtítulo</label>
-                                <input v-model="configForm.member_area_config.login.subtitle" type="text" :class="inputClass" placeholder="Entre com seu e-mail e senha" />
-                            </div>
-                            <div>
-                                <label class="mb-1 block text-xs font-medium text-zinc-600 dark:text-zinc-400">Cor primária (botão e links)</label>
-                                <input v-model="configForm.member_area_config.login.primary_color" type="color" class="h-9 w-full cursor-pointer rounded-lg border dark:border-zinc-600" />
-                            </div>
-                            <div class="border-t border-zinc-200 pt-4 dark:border-zinc-700">
-                                <label class="mb-2 block text-xs font-medium text-zinc-600 dark:text-zinc-400">Definir senha (novos acessos)</label>
-                                <p class="mb-2 text-xs text-zinc-500 dark:text-zinc-400">Escolha apenas uma opção.</p>
-                                <div class="space-y-2">
-                                    <label class="flex items-center gap-2">
-                                        <input v-model="loginAccessMode" type="radio" value="auto" class="rounded border-zinc-300 text-[var(--color-primary)] focus:ring-[var(--color-primary)]" />
-                                        <span class="text-sm">Gerada automaticamente (aleatória) — enviada no e-mail de acesso</span>
-                                    </label>
-                                    <label class="flex items-center gap-2">
-                                        <input v-model="loginAccessMode" type="radio" value="default" class="rounded border-zinc-300 text-[var(--color-primary)] focus:ring-[var(--color-primary)]" />
-                                        <span class="text-sm">Senha padrão — todos os novos acessos usam a mesma senha</span>
-                                    </label>
-                                    <label class="flex items-center gap-2">
-                                        <input v-model="loginAccessMode" type="radio" value="email_only" class="rounded border-zinc-300 text-[var(--color-primary)] focus:ring-[var(--color-primary)]" />
-                                        <span class="text-sm">Permitir login apenas com e-mail (menos seguro) — campo de senha não é exibido</span>
-                                    </label>
-                                </div>
-                                <div v-if="loginAccessMode === 'default'" class="mt-3">
-                                    <label class="mb-1 block text-xs font-medium text-zinc-600 dark:text-zinc-400">Senha padrão</label>
-                                    <input v-model="configForm.member_area_config.login.default_password" type="password" autocomplete="new-password" :class="inputClass" placeholder="Digite a senha padrão" class="max-w-xs" />
-                                    <p class="mt-1 text-xs text-zinc-500 dark:text-zinc-400">Será usada por todos os alunos ao acessar esta área. Pode ser incluída no e-mail com a variável {senha} no template.</p>
-                                </div>
-                            </div>
-                        </div>
-                        <Button type="button" class="mt-4" @click="saveConfig" :disabled="processing">Salvar</Button>
-                    </template>
-
                     <template v-else-if="activeTab === 'modulos'">
                         <input ref="moduleThumbnailFileInput" type="file" accept="image/*" class="hidden" @change="onModuleThumbnailChange" />
                         <div class="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden lg:flex-row">
                             <div class="min-w-0 flex-1 overflow-y-auto overflow-x-hidden pr-2">
                         <h2 class="mb-1 text-sm font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Estrutura do curso</h2>
-                        <p class="mb-3 text-xs text-zinc-500 dark:text-zinc-400">Seções agrupam módulos. Clique em um módulo (ou em &quot;Aulas&quot;) para ver e editar aulas no painel à direita.</p>
+                        <p class="mb-3 text-xs text-zinc-500 dark:text-zinc-400">Módulos e aulas. Clique em um módulo (ou em &quot;Aulas&quot;) para editar no painel à direita.</p>
                         <div class="mb-3 flex flex-wrap items-center gap-2">
-                            <Button size="sm" @click="openSectionModal"><Plus class="mr-1.5 h-4 w-4" /> Nova seção</Button>
-                            <span class="text-zinc-400 dark:text-zinc-500">|</span>
-                            <button type="button" class="text-xs text-zinc-500 underline hover:text-zinc-700 dark:hover:text-zinc-300" @click="expandAllModulos">Expandir tudo</button>
-                            <button type="button" class="text-xs text-zinc-500 underline hover:text-zinc-700 dark:hover:text-zinc-300" @click="collapseAllModulos">Recolher tudo</button>
+                            <Button size="sm" @click="openModuleModal"><Plus class="mr-1.5 h-4 w-4" /> Novo módulo</Button>
                         </div>
-                        <div class="space-y-2">
-                            <template v-for="section in produto.sections" :key="section.id">
+                        <div class="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                            <template v-for="modItem in produto.modules" :key="'course-' + modItem.id">
+                                <div
+                                    v-if="!modItem.related_product_id && !modItem.external_url"
+                                    class="flex flex-col overflow-hidden rounded-lg border border-zinc-200 bg-white shadow-sm transition dark:border-zinc-700 dark:bg-zinc-800/80"
+                                    :class="{ 'ring-2 ring-sky-500/50 dark:ring-sky-400/40': modulosSelectedModuleId === modItem.id }"
+                                >
+                                    <button type="button" class="flex min-w-0 flex-1 flex-col items-stretch text-left" @click="selectModuleForAulas(modItem.id)">
+                                        <div class="h-14 w-full shrink-0 overflow-hidden bg-zinc-200 dark:bg-zinc-700">
+                                            <img v-if="modItem.thumbnail" :src="modItem.thumbnail" :alt="modItem.title" class="h-full w-full object-cover" />
+                                            <div v-else class="flex h-full w-full items-center justify-center text-zinc-400 dark:text-zinc-500">
+                                                <BookOpen class="h-5 w-5" />
+                                            </div>
+                                        </div>
+                                        <div class="min-w-0 flex-1 p-1.5">
+                                            <p class="truncate text-xs font-medium text-zinc-800 dark:text-zinc-200">{{ modItem.title }}</p>
+                                            <p class="text-[10px] text-zinc-500 dark:text-zinc-400">{{ (modItem.lessons?.length ?? 0) }} {{ (modItem.lessons?.length ?? 0) === 1 ? 'aula' : 'aulas' }}</p>
+                                        </div>
+                                    </button>
+                                    <div class="flex items-center gap-0.5 border-t border-zinc-200 p-1 dark:border-zinc-700">
+                                        <Button size="sm" variant="outline" class="!py-0.5 !text-[10px] flex-1 min-w-0" @click.stop="selectModuleForAulas(modItem.id)">Aulas</Button>
+                                        <button type="button" class="rounded p-1 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-700 dark:hover:bg-zinc-700 dark:hover:text-zinc-300" title="Duplicar" @click.stop="duplicateModule(modItem.id)"><Copy class="h-3 w-3" /></button>
+                                        <button type="button" class="rounded p-1 text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-700" title="Editar" @click.stop="openModuleEdit(modItem)"><Pencil class="h-3 w-3" /></button>
+                                        <button type="button" class="rounded p-1 text-red-600 hover:bg-red-50" title="Remover" @click.stop="deleteModule(modItem.id)"><Trash2 class="h-3 w-3" /></button>
+                                    </div>
+                                </div>
+                            </template>
+                            <template v-if="false" v-for="mod in produto.modules" :key="mod.id">
                                 <div class="min-w-0 rounded-lg border border-zinc-200 bg-white dark:border-zinc-700 dark:bg-zinc-900">
                                     <div class="flex min-w-0 items-start gap-2 py-2 px-3">
                                         <button type="button" class="mt-0.5 shrink-0 rounded p-0.5 text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300" @click="toggleSection(section.id)" aria-label="Expandir ou recolher">
@@ -2320,7 +2103,7 @@ const inputClass = 'block w-full rounded-lg border border-zinc-300 bg-white px-3
                                     </div>
                                 </div>
                             </template>
-                            <p v-if="!produto.sections?.length" class="rounded-lg border border-dashed border-zinc-300 py-6 text-center text-sm text-zinc-500 dark:border-zinc-600 dark:text-zinc-400">Nenhuma seção. Clique em &quot;Nova seção&quot; para começar.</p>
+                            <p v-if="!produto.modules?.length" class="col-span-full rounded-lg border border-dashed border-zinc-300 py-6 text-center text-sm text-zinc-500 dark:border-zinc-600 dark:text-zinc-400">Nenhum módulo. Clique em &quot;Novo módulo&quot; para começar.</p>
                         </div>
                             </div>
 
@@ -3102,7 +2885,7 @@ const inputClass = 'block w-full rounded-lg border border-zinc-300 bg-white px-3
             </aside>
 
             <div
-                v-if="showPreview"
+                v-if="false"
                 class="hidden min-h-0 flex-1 flex-col overflow-hidden bg-zinc-200 p-4 dark:bg-zinc-900 lg:flex"
             >
                 <p class="mb-2 shrink-0 text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Preview</p>
@@ -3112,7 +2895,7 @@ const inputClass = 'block w-full rounded-lg border border-zinc-300 bg-white px-3
                         :mode="previewMode"
                         :config="configForm.member_area_config"
                         :product-name="produto.name"
-                        :sections="produto.sections ?? []"
+                        :sections="produto.modules ?? []"
                         :internal-products="produto.internal_products ?? []"
                         :progress-percent="0"
                         :continue-watching="null"

@@ -1,11 +1,11 @@
 import { createApp } from 'vue';
 import MemberBuilderStandalone from './Pages/Produtos/MemberBuilder/Standalone.vue';
 
-// Aplicar tema (dark/light) igual ao restante do app — localStorage ou prefers-color-scheme
+// Aplicar tema (dark/light) igual ao restante do app — localStorage (padrão: claro)
 (function applyTheme() {
     try {
         const stored = localStorage.getItem('theme');
-        const isDark = stored !== 'light';
+        const isDark = stored === 'dark';
         document.documentElement.classList.toggle('dark', isDark);
     } catch (_) {}
 })();
