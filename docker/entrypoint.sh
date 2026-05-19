@@ -99,7 +99,7 @@ if ($scheme === "http" && $host !== "" && $host !== "localhost" && $host !== "12
 }
 $vars = [
     "APP_NAME" => getenv("APP_NAME") ?: "Getfy",
-    "APP_ENV" => getenv("APP_ENV") ?: "local",
+    "APP_ENV" => getenv("APP_ENV") ?: (getenv("GETFY_DOCKER") === "true" ? "production" : "local"),
     "APP_DEBUG" => getenv("APP_DEBUG") ?: "false",
     "APP_URL" => $appUrl ?: null,
     "APP_KEY" => getenv("APP_KEY") ?: (trim((string) @file_get_contents(".docker/app.key")) ?: ""),

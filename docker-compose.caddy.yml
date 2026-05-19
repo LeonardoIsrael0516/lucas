@@ -33,8 +33,8 @@ services:
       - getfy_storage:/var/www/html/storage
       - getfy_env:/var/www/html/.docker # plugins ZIP/loja + dados .docker — persistir nos updates
     environment:
-      APP_ENV: ${GETFY_APP_ENV:-local}
-      APP_DEBUG: ${GETFY_APP_DEBUG:-true}
+      APP_ENV: ${GETFY_APP_ENV:-production}
+      APP_DEBUG: ${GETFY_APP_DEBUG:-false}
       GETFY_APP_URL: ${GETFY_APP_URL:-http://localhost}
       APP_INSTALLED: ${GETFY_APP_INSTALLED:-true}
       APP_AUTO_MIGRATE: ${GETFY_APP_AUTO_MIGRATE:-false}
@@ -107,8 +107,8 @@ services:
       - getfy_storage:/var/www/html/storage
       - getfy_env:/var/www/html/.docker # plugins ZIP/loja + dados .docker — persistir nos updates
     environment:
-      APP_ENV: ${GETFY_APP_ENV:-local}
-      APP_DEBUG: ${GETFY_APP_DEBUG:-true}
+      APP_ENV: ${GETFY_APP_ENV:-production}
+      APP_DEBUG: ${GETFY_APP_DEBUG:-false}
       GETFY_APP_URL: ${GETFY_APP_URL:-http://localhost}
       APP_INSTALLED: ${GETFY_APP_INSTALLED:-true}
       APP_AUTO_MIGRATE: ${GETFY_APP_AUTO_MIGRATE:-false}
