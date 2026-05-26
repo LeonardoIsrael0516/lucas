@@ -1,0 +1,1 @@
+import{u as o}from"./app-B9e_vpL_.js";import{j as e}from"./Button-CHuLjrgp.js";function l(){const a=o();return{showBackToPanel:e(()=>a.props.auth?.user?.role==="admin"),backToPanelHref:"/dashboard",backToPanelLabel:"Voltar para admin"}}export{l as u};

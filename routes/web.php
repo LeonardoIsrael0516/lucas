@@ -480,6 +480,13 @@ Route::middleware(['auth', 'admin.tenant', 'role:admin|infoprodutor|team', 'audi
         Route::post('/suporte-alunos/{ticket}/close', [\App\Http\Controllers\SupportTicketsManageController::class, 'close'])->name('support-tickets.close');
     });
 
+    Route::middleware('team.permission:reembolsos.view')->group(function () {
+        Route::get('/reembolsos', [\App\Http\Controllers\RefundRequestsManageController::class, 'index'])->name('refund-requests.index');
+        Route::get('/reembolsos/{refundRequest}', [\App\Http\Controllers\RefundRequestsManageController::class, 'show'])->name('refund-requests.show');
+        Route::post('/reembolsos/{refundRequest}/aprovar', [\App\Http\Controllers\RefundRequestsManageController::class, 'approve'])->name('refund-requests.approve');
+        Route::post('/reembolsos/{refundRequest}/negar', [\App\Http\Controllers\RefundRequestsManageController::class, 'deny'])->name('refund-requests.deny');
+    });
+
     Route::middleware('team.permission:configuracoes.view')->prefix('area-aluno')->name('area-aluno.')->group(function () {
         Route::get('/', [\App\Http\Controllers\StudentAreaManageController::class, 'index'])->name('index');
         Route::get('/personalizacao', [\App\Http\Controllers\StudentAreaManageController::class, 'personalizacao'])->name('personalizacao');
@@ -505,6 +512,7 @@ Route::middleware(['auth', 'admin.tenant', 'role:admin|infoprodutor|team', 'audi
 
 Route::middleware(['auth', 'role:aluno|admin'])->group(function () {
     Route::get('/area-membros', [\App\Http\Controllers\MemberAreaController::class, 'index'])->name('member-area.index');
+    Route::post('/area-membros/reembolsos', [\App\Http\Controllers\StudentRefundController::class, 'store'])->name('member-area.refunds.store');
     Route::get('/area-membros/comunidade', [\App\Http\Controllers\StudentAreaHubController::class, 'comunidade'])->name('student-hub.comunidade');
     Route::get('/area-membros/comunidade/{pageSlug}', [\App\Http\Controllers\StudentAreaHubController::class, 'comunidadePage'])->name('student-hub.comunidade.page');
     Route::post('/area-membros/comunidade/{pageSlug}/posts', [\App\Http\Controllers\StudentAreaHubController::class, 'storeCommunityPost'])->name('student-hub.comunidade.posts.store');

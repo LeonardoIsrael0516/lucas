@@ -16,7 +16,9 @@ import {
     Palette,
     LogIn,
     MessageCircle,
+    RotateCcw,
 } from 'lucide-vue-next';
+import Toggle from '@/components/ui/Toggle.vue';
 import IntegrationCard from '@/components/IntegrationCard.vue';
 import EmailProviderSidebar from '@/components/EmailProviderSidebar.vue';
 
@@ -66,7 +68,7 @@ const props = defineProps({
 });
 
 function allAllowedTabIds() {
-    const core = ['email', 'storage', 'traducoes', 'cron', 'update'];
+    const core = ['email', 'storage', 'traducoes', 'reembolso', 'cron', 'update'];
     const extra = (props.settings_plugin_tabs || []).map((t) => t.id).filter(Boolean);
     return [...core, ...extra];
 }
@@ -163,6 +165,8 @@ const form = useForm({
     login_password_mode: props.settings.login_password_mode ?? 'auto',
     login_default_password: props.settings.login_default_password ?? '',
     login_without_password: !!props.settings.login_without_password,
+    refund_enabled: !!props.settings.refund_enabled,
+    refund_days: props.settings.refund_days ?? 7,
 });
 
 const showCloudR2Override = ref(false);
@@ -177,10 +181,13 @@ const sendResult = vueRef({ status: null, message: '' });
 const connectionTesting = vueRef(false);
 const sendTestSending = vueRef(false);
 
+const refundAllowedDays = computed(() => props.settings.refund_allowed_days ?? [7, 15, 30, 60, 90]);
+
 const coreTabsStatic = [
     { id: 'email', label: 'E-mail', icon: Mail },
     { id: 'storage', label: 'Storage', icon: HardDrive },
     { id: 'traducoes', label: 'Traduções', icon: Languages },
+    { id: 'reembolso', label: 'Reembolso', icon: RotateCcw },
     { id: 'cron', label: 'Cron', icon: Clock },
     { id: 'update', label: 'Update', icon: Download },
 ];
@@ -865,6 +872,44 @@ const selectClass =
                 </div>
             </Transition>
 
+            <!-- Aba Reembolso -->
+            <Transition
+                enter-active-class="transition duration-200 ease-out"
+                enter-from-class="opacity-0"
+                enter-to-class="opacity-100"
+                leave-active-class="transition duration-150 ease-in"
+                leave-from-class="opacity-100"
+                leave-to-class="opacity-0"
+            >
+                <div v-show="activeTab === 'reembolso'" class="space-y-6">
+                    <section class="overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-sm dark:border-zinc-700 dark:bg-zinc-800/50">
+                        <div class="border-b border-zinc-200 bg-zinc-50 px-6 py-5 dark:border-zinc-700 dark:bg-zinc-800">
+                            <h2 class="text-base font-semibold text-zinc-900 dark:text-white">Reembolso para alunos</h2>
+                            <p class="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
+                                Permite que alunos solicitem reembolso na área de membros, nos cursos adquiridos dentro do prazo configurado.
+                            </p>
+                        </div>
+                        <div class="space-y-6 p-6">
+                            <div>
+                                <Toggle v-model="form.refund_enabled" label="Exibir opção de reembolso para alunos" />
+                                <p class="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+                                    Exibe o botão &quot;Reembolso&quot; nos cards de curso em <code class="rounded bg-zinc-100 px-1 font-mono text-xs dark:bg-zinc-900/40">/area-membros</code>.
+                                </p>
+                            </div>
+                            <div>
+                                <label class="mb-1 block text-sm font-medium text-zinc-700 dark:text-zinc-300">Prazo para solicitar (dias após a compra)</label>
+                                <select v-model.number="form.refund_days" :class="selectClass" :disabled="!form.refund_enabled">
+                                    <option v-for="d in refundAllowedDays" :key="d" :value="d">{{ d }} dias</option>
+                                </select>
+                                <p class="mt-2 text-xs text-zinc-500 dark:text-zinc-400">
+                                    Conta a partir da data do pedido pago. Após aprovar no painel, faça o estorno manualmente no gateway de pagamento.
+                                </p>
+                            </div>
+                        </div>
+                    </section>
+                </div>
+            </Transition>
+
             <!-- Aba Traduções -->
             <Transition
                 enter-active-class="transition duration-200 ease-out"
@@ -877,7 +922,7 @@ const selectClass =
                 <div v-show="activeTab === 'traducoes'" class="hidden space-y-6 sm:block">
                     <section class="overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-sm dark:border-zinc-700 dark:bg-zinc-800/50">
                         <div class="border-b border-zinc-200 bg-zinc-50 px-6 py-5 dark:border-zinc-700 dark:bg-zinc-800">
-                            <h2 class="text-base font-semibold text-zinc-900 dark:text-white">Checkout � textos por idioma</h2>
+                            <h2 class="text-base font-semibold text-zinc-900 dark:text-white">Checkout — textos por idioma</h2>
                             <p class="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
                                 Edite os textos exibidos no checkout. Português (BR), English, Español.
                             </p>
@@ -949,7 +994,7 @@ const selectClass =
             <div
                 class="flex items-center gap-3 pt-4 sm:pt-2 md:pt-4 sticky bottom-4 z-10 -mx-2 rounded-xl border border-zinc-200 bg-white/95 px-4 py-3 shadow-lg backdrop-blur sm:static sm:mx-0 sm:rounded-none sm:border-0 sm:bg-transparent sm:px-0 sm:py-0 sm:shadow-none dark:border-zinc-700 dark:bg-zinc-800/95 sm:dark:bg-transparent sm:dark:border-0"
             >
-                <Button type="submit" :disabled="form.processing">Salvar altera��es</Button>
+                <Button type="submit" :disabled="form.processing">Salvar alterações</Button>
             </div>
         </form>
 

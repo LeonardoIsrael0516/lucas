@@ -21,6 +21,7 @@ import {
     CodeXml,
     LifeBuoy,
     GraduationCap,
+    RotateCcw,
 } from 'lucide-vue-next';
 import { useSidebar } from '@/composables/useSidebar';
 import ConquistasWidget from '@/components/layout/ConquistasWidget.vue';
@@ -82,6 +83,7 @@ const navItems = computed(() => {
     if (canView('integracoes.view')) items.push({ name: 'Integrações', href: '/integracoes', icon: Cable });
     if (canView('email_marketing.view')) items.push({ name: 'E-mail Marketing', href: '/email-marketing', icon: Mail });
     if (canView('suporte.view')) items.push({ name: 'Suporte alunos', href: '/suporte-alunos', icon: LifeBuoy });
+    if (canView('reembolsos.view')) items.push({ name: 'Reembolsos', href: '/reembolsos', icon: RotateCcw });
 
     // Plugins: apenas admin/infoprodutor (backend reforça)
     if ((page.props.auth?.user?.role === 'admin' || page.props.auth?.user?.role === 'infoprodutor') && pluginNavItems.value.length) {

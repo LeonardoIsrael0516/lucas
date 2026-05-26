@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\Setting;
 use App\Support\CheckoutTranslations;
+use App\Support\RefundSettings;
 use App\Support\DockerSetupState;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Crypt;
@@ -128,6 +129,9 @@ class SettingsController extends Controller
                 'student_support_enabled' => Setting::get('student_support_enabled', '0', $tenantId) === '1',
                 'student_support_whatsapp_enabled' => Setting::get('student_support_whatsapp_enabled', '0', $tenantId) === '1',
                 'student_support_whatsapp_url' => (string) Setting::get('student_support_whatsapp_url', '', $tenantId),
+                'refund_enabled' => RefundSettings::enabled($tenantId),
+                'refund_days' => RefundSettings::days($tenantId),
+                'refund_allowed_days' => RefundSettings::ALLOWED_DAYS,
                 'login_title' => (string) Setting::get('login_title', 'Área de Membros', $tenantId),
                 'login_subtitle' => (string) Setting::get('login_subtitle', 'Entre com seu e-mail e senha', $tenantId),
                 'login_background_color' => (string) Setting::get('login_background_color', '#18181b', $tenantId),
@@ -179,6 +183,8 @@ class SettingsController extends Controller
             'student_support_enabled' => ['sometimes', 'boolean'],
             'student_support_whatsapp_enabled' => ['sometimes', 'boolean'],
             'student_support_whatsapp_url' => ['nullable', 'string', 'max:512'],
+            'refund_enabled' => ['sometimes', 'boolean'],
+            'refund_days' => ['nullable', 'integer', 'in:'.implode(',', RefundSettings::ALLOWED_DAYS)],
             'login_title' => ['nullable', 'string', 'max:255'],
             'login_subtitle' => ['nullable', 'string', 'max:255'],
             'login_background_color' => ['nullable', 'string', 'max:32'],
@@ -207,6 +213,13 @@ class SettingsController extends Controller
         Setting::set('student_support_whatsapp_enabled', $request->boolean('student_support_whatsapp_enabled') ? '1' : '0', $tenantId);
         $waUrl = trim((string) $request->input('student_support_whatsapp_url', ''));
         Setting::set('student_support_whatsapp_url', $waUrl, $tenantId);
+
+        if ($request->has('refund_enabled')) {
+            RefundSettings::setEnabled($request->boolean('refund_enabled'), $tenantId);
+        }
+        if ($request->filled('refund_days')) {
+            RefundSettings::setDays((int) $request->input('refund_days'), $tenantId);
+        }
 
         $emailKeys = [
             'smtp_host', 'smtp_port', 'smtp_username', 'smtp_encryption',

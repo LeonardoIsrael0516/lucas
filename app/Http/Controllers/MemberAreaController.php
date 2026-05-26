@@ -13,7 +13,9 @@ use App\Models\ProductRecommendedProduct;
 use App\Models\Subscription;
 use App\Services\MemberAreaResolver;
 use App\Services\MemberProgressService;
+use App\Services\RefundRequestService;
 use App\Services\StorageService;
+use App\Support\RefundSettings;
 use App\Support\StudentAreaBranding;
 use App\Support\StudentAreaSettings;
 use Carbon\Carbon;
@@ -29,6 +31,7 @@ class MemberAreaController extends Controller
     public function __construct(
         private MemberAreaResolver $resolver,
         private MemberProgressService $memberProgressService,
+        private RefundRequestService $refundRequestService,
     ) {}
 
     public function index(): Response
@@ -115,6 +118,7 @@ class MemberAreaController extends Controller
             'hub_nav' => $hubNav,
             'profile_href' => route('profile.index'),
             'student_branding' => $studentBranding,
+            'refund_settings' => RefundSettings::payload($tenantId),
         ], $this->studentSupportPayload($tenantId)));
     }
 
@@ -142,6 +146,7 @@ class MemberAreaController extends Controller
             'has_new_content' => $newBadge,
             'continue_href' => $lastLessonUrl,
             'member_area_href' => $baseUrl,
+            'refund' => $this->refundRequestService->refundMetaForCourse($product, $user),
         ];
     }
 

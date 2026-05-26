@@ -56,6 +56,11 @@ class ProductAccessService
         return $raw ? Carbon::parse($raw)->endOfDay() : null;
     }
 
+    public function revoke(User $user, Product $product): void
+    {
+        $product->users()->detach($user->id);
+    }
+
     public function hasActiveAccess(Product $product, User $user): bool
     {
         if (($user->isAdmin() || $user->isInfoprodutor()) && (int) $user->tenant_id === (int) $product->tenant_id) {

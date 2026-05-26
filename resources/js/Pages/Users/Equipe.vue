@@ -54,6 +54,7 @@ const permissionDefs = [
     { key: 'api_pagamentos.view', label: 'API de Pagamentos' },
     { key: 'configuracoes.view', label: 'Configurações' },
     { key: 'suporte.view', label: 'Suporte / tickets alunos' },
+    { key: 'reembolsos.view', label: 'Reembolsos' },
     { key: 'equipe.manage', label: 'Gerenciar equipe' },
 ];
 

@@ -1,12 +1,13 @@
 <script setup>
-import { computed, ref, toRef } from 'vue';
-import { Link, router } from '@inertiajs/vue3';
+import { computed, onMounted, onUnmounted, ref, toRef } from 'vue';
+import { Link, router, usePage } from '@inertiajs/vue3';
 import StudentAreaDocumentHead from '@/components/student/StudentAreaDocumentHead.vue';
 import ThemeToggler from '@/components/layout/ThemeToggler.vue';
 import StudentCourseCover from '@/components/student/StudentCourseCover.vue';
 import StudentAreaBackToPanelLink from '@/components/student/StudentAreaBackToPanelLink.vue';
+import RefundRequestModal from '@/components/member-area/RefundRequestModal.vue';
 import { useStudentAreaSidebarLogo } from '@/composables/useStudentAreaLogo';
-import { Award, Bell, BookOpen, ChevronRight, LayoutGrid, LifeBuoy, Lock, LogOut, MessageCircle, Search, Trophy, UserRound } from 'lucide-vue-next';
+import { Award, Bell, BookOpen, ChevronRight, LayoutGrid, LifeBuoy, Lock, LogOut, MessageCircle, MoreVertical, RotateCcw, Search, Trophy, UserRound } from 'lucide-vue-next';
 
 const props = defineProps({
     search_query: { type: String, default: '' },
@@ -34,6 +35,61 @@ const props = defineProps({
         }),
     },
     support_whatsapp: { type: Object, default: () => ({ enabled: false, url: '' }) },
+    refund_settings: { type: Object, default: () => ({ enabled: false, days: 7 }) },
+});
+
+const page = usePage();
+const flashSuccess = computed(() => page.props.flash?.success ?? null);
+const refundModalOpen = ref(false);
+const refundModalCourse = ref(null);
+const refundModalRef = ref(null);
+
+function openRefundModal(course) {
+    refundModalCourse.value = course;
+    refundModalOpen.value = true;
+    refundModalRef.value?.openFor(course);
+}
+
+function closeRefundModal() {
+    refundModalOpen.value = false;
+    refundModalCourse.value = null;
+}
+
+const openCourseMenuId = ref(null);
+
+function showCourseActionsMenu() {
+    return !!props.refund_settings?.enabled;
+}
+
+function toggleCourseMenu(courseId) {
+    openCourseMenuId.value = openCourseMenuId.value === courseId ? null : courseId;
+}
+
+function closeCourseMenu() {
+    openCourseMenuId.value = null;
+}
+
+function openRefundFromMenu(course) {
+    closeCourseMenu();
+    openRefundModal(course);
+}
+
+function handleCourseMenuClickOutside(event) {
+    if (openCourseMenuId.value == null) {
+        return;
+    }
+    const menuEl = document.querySelector(`[data-course-menu="${openCourseMenuId.value}"]`);
+    if (menuEl && !menuEl.contains(event.target)) {
+        closeCourseMenu();
+    }
+}
+
+onMounted(() => {
+    document.addEventListener('click', handleCourseMenuClickOutside);
+});
+
+onUnmounted(() => {
+    document.removeEventListener('click', handleCourseMenuClickOutside);
 });
 
 const searchLocal = ref(props.search_query || '');
@@ -230,6 +286,13 @@ function lessonProgressBar(item) {
                     </div>
                 </section>
 
+                <div
+                    v-if="flashSuccess"
+                    class="mb-4 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-200"
+                >
+                    {{ flashSuccess }}
+                </div>
+
                 <section id="sec-meus-cursos">
                     <h2 class="mb-4 text-lg font-semibold text-zinc-900 dark:text-white">Meus cursos</h2>
                     <div v-if="my_courses.length" class="grid gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
@@ -242,7 +305,61 @@ function lessonProgressBar(item) {
                                 </div>
                             </StudentCourseCover>
                             <div class="flex flex-1 flex-col p-4">
-                                <h3 class="font-semibold text-zinc-900 dark:text-white">{{ c.name }}</h3>
+                                <div class="flex items-start justify-between gap-2">
+                                    <h3 class="min-w-0 flex-1 font-semibold text-zinc-900 dark:text-white">{{ c.name }}</h3>
+                                    <div
+                                        v-if="showCourseActionsMenu()"
+                                        class="relative shrink-0"
+                                        :data-course-menu="c.id"
+                                    >
+                                        <button
+                                            type="button"
+                                            class="flex h-8 w-8 items-center justify-center rounded-lg text-zinc-500 transition hover:bg-zinc-100 hover:text-zinc-700 dark:hover:bg-zinc-800 dark:hover:text-zinc-200"
+                                            aria-label="Ações do curso"
+                                            :aria-expanded="openCourseMenuId === c.id"
+                                            @click.stop="toggleCourseMenu(c.id)"
+                                        >
+                                            <MoreVertical class="h-4 w-4" />
+                                        </button>
+                                        <div
+                                            v-show="openCourseMenuId === c.id"
+                                            class="absolute right-0 top-full z-30 mt-1 w-52 rounded-xl border border-zinc-200 bg-white py-1 shadow-lg dark:border-zinc-700 dark:bg-zinc-900"
+                                            role="menu"
+                                        >
+                                            <button
+                                                v-if="c.refund?.can_request"
+                                                type="button"
+                                                role="menuitem"
+                                                class="flex w-full items-center gap-2 px-3 py-2.5 text-left text-sm text-red-700 hover:bg-red-50 dark:text-red-300 dark:hover:bg-red-950/40"
+                                                @click="openRefundFromMenu(c)"
+                                            >
+                                                <RotateCcw class="h-4 w-4 shrink-0" />
+                                                Solicitar reembolso
+                                            </button>
+                                            <p
+                                                v-else-if="c.refund?.pending"
+                                                role="menuitem"
+                                                class="px-3 py-2.5 text-sm text-amber-700 dark:text-amber-300"
+                                            >
+                                                Reembolso em análise
+                                            </p>
+                                            <p
+                                                v-else-if="c.refund?.status === 'denied' && !c.refund?.can_request"
+                                                role="menuitem"
+                                                class="px-3 py-2.5 text-sm text-zinc-500 dark:text-zinc-400"
+                                            >
+                                                Reembolso negado
+                                            </p>
+                                            <p
+                                                v-else
+                                                role="menuitem"
+                                                class="px-3 py-2.5 text-sm text-zinc-500 dark:text-zinc-400"
+                                            >
+                                                Reembolso indisponível
+                                            </p>
+                                        </div>
+                                    </div>
+                                </div>
                                 <p v-if="c.apostilas_label" class="mt-1 text-sm text-zinc-600 dark:text-zinc-400">{{ c.apostilas_label }}</p>
                                 <div v-if="c.download_progress" class="mt-2">
                                     <div class="flex justify-between text-xs text-zinc-500 dark:text-zinc-400">
@@ -260,16 +377,25 @@ function lessonProgressBar(item) {
                                         />
                                     </div>
                                 </div>
-                                <div class="mt-4 flex gap-2">
+                                <p
+                                    v-if="refund_settings?.enabled && c.refund?.pending"
+                                    class="mt-3 rounded-lg bg-amber-50 px-3 py-2 text-xs font-medium text-amber-800 dark:bg-amber-950/40 dark:text-amber-200"
+                                >
+                                    Reembolso em análise
+                                </p>
+                                <div class="mt-4 flex flex-wrap gap-2">
                                     <a
                                         :href="c.continue_href"
-                                        class="inline-flex flex-1 items-center justify-center rounded-lg px-4 py-2.5 text-sm font-medium text-white transition"
+                                        class="inline-flex flex-1 min-w-[7rem] items-center justify-center rounded-lg px-4 py-2.5 text-sm font-medium text-white transition"
                                         :style="{ backgroundColor: 'var(--student-primary)' }"
                                     >
                                         Continuar
                                         <ChevronRight class="ml-1 h-4 w-4" />
                                     </a>
-                                    <a :href="c.member_area_href" class="inline-flex items-center justify-center rounded-lg border border-zinc-300 px-4 py-2.5 text-sm font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-600 dark:text-zinc-200 dark:hover:bg-zinc-800">
+                                    <a
+                                        :href="c.member_area_href"
+                                        class="inline-flex items-center justify-center rounded-lg border border-zinc-300 px-4 py-2.5 text-sm font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-600 dark:text-zinc-200 dark:hover:bg-zinc-800"
+                                    >
                                         Acessar
                                     </a>
                                 </div>
@@ -343,6 +469,13 @@ function lessonProgressBar(item) {
                     />
                 </svg>
             </a>
+
+            <RefundRequestModal
+                ref="refundModalRef"
+                :open="refundModalOpen"
+                :course="refundModalCourse"
+                @close="closeRefundModal"
+            />
         </div>
     </div>
 </template>

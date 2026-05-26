@@ -86,6 +86,7 @@ class TeamAccessService
             'api_pagamentos.view' => true,
             'configuracoes.view' => true,
             'suporte.view' => true,
+            'reembolsos.view' => true,
             'equipe.manage' => true,
         ];
     }
