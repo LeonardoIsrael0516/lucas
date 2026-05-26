@@ -31,6 +31,7 @@ import {
     BarChart3,
     Presentation,
     Copy,
+    Sparkles,
 } from 'lucide-vue-next';
 import {
     communityPageIconComponents,
@@ -38,6 +39,26 @@ import {
     communityPageEmojis,
     getCommunityPageIconComponent,
 } from '@/utils/communityPageIcons';
+import { pickFaviconUrl } from '@/composables/resolveAssetUrl';
+
+function applyDocumentFavicon(url) {
+    if (typeof document === 'undefined') return;
+    const href = pickFaviconUrl(url);
+    const rels = ['icon', 'apple-touch-icon'];
+    if (!href) return;
+    for (const rel of rels) {
+        let link = document.querySelector(`link[rel="${rel}"]`);
+        if (!link) {
+            link = document.createElement('link');
+            link.rel = rel;
+            document.head.appendChild(link);
+        }
+        link.href = href;
+        if (rel === 'icon') {
+            link.type = 'image/png';
+        }
+    }
+}
 
 const props = defineProps({
     produto: { type: Object, required: true },
@@ -146,9 +167,16 @@ const configForm = reactive({
     domain_value: props.produto.member_area_domain?.value ?? props.produto.checkout_slug ?? '',
 });
 
+watch(
+    () => configForm.member_area_config?.logos?.favicon,
+    (url) => applyDocumentFavicon(url),
+    { immediate: true },
+);
+
 const tabs = [
     { id: 'modulos', label: 'Módulos', icon: Layers, hasPreview: false },
     { id: 'turmas', label: 'Turmas', icon: Users, hasPreview: false },
+    { id: 'recomendados', label: 'Cursos recomendados', icon: Sparkles, hasPreview: false },
     { id: 'progresso', label: 'Progresso', icon: BarChart3, hasPreview: false },
     { id: 'comentarios', label: 'Comentários', icon: MessageSquare, hasPreview: false },
 ];
@@ -203,6 +231,10 @@ onMounted(() => {
     const p = new URLSearchParams(window.location.search);
     const t = p.get('tab');
     if (t && tabIds.includes(t)) activeTab.value = t;
+    const moduleIdParam = p.get('moduleId');
+    if (moduleIdParam && findModuleById(moduleIdParam)) {
+        modulosSelectedModuleId.value = /^\d+$/.test(moduleIdParam) ? Number(moduleIdParam) : moduleIdParam;
+    }
 });
 watch(activeTab, (id) => {
     const url = new URL(window.location.href);
@@ -499,8 +531,20 @@ function pdfLessonFileLabel(type) {
 }
 
 function findModuleById(id) {
-    if (!id) return null;
-    return (props.produto.modules ?? []).find((m) => m.id === id) ?? null;
+    if (id == null || id === '') return null;
+    return (props.produto.modules ?? []).find((m) => m.id == id) ?? null;
+}
+
+function mergeLessonIntoModule(module, lesson) {
+    if (!module || !lesson?.id) return;
+    const lessons = [...(module.lessons ?? [])];
+    const idx = lessons.findIndex((l) => l.id == lesson.id);
+    if (idx >= 0) {
+        lessons[idx] = lesson;
+    } else {
+        lessons.push(lesson);
+    }
+    module.lessons = lessons;
 }
 
 function moduleKind(mod) {
@@ -643,13 +687,17 @@ async function saveLessonFromSidebar() {
     modulosLessonFormSaving.value = true;
     try {
         const payload = lessonPayload(form);
-        if (form.id) {
-            await axios.put(`${base.value}/lessons/${form.id}`, payload, { headers: headers() });
-        } else {
-            await axios.post(`${base.value}/modules/${moduleId}/lessons`, payload, { headers: headers() });
+        const { data } = form.id
+            ? await axios.put(`${base.value}/lessons/${form.id}`, payload, { headers: headers() })
+            : await axios.post(`${base.value}/modules/${moduleId}/lessons`, payload, { headers: headers() });
+        const lesson = data?.lesson;
+        if (!lesson?.id) {
+            reload();
+            return;
         }
+        mergeLessonIntoModule(modulosSelectedModule.value, lesson);
+        previewKey.value++;
         closeModulosLessonForm();
-        reload();
     } catch (e) {
         const msg = e.response?.data?.message ?? e.response?.data?.errors?.title?.[0] ?? e.message ?? 'Erro ao salvar.';
         alert(msg);
@@ -738,6 +786,8 @@ const moduleModalExternalUrl = ref('');
 const moduleModalReleaseMode = ref('none'); // none | days | date
 const moduleModalReleaseAfterDays = ref('');
 const moduleModalReleaseAtDate = ref('');
+const moduleModalEditingId = ref(null);
+const moduleModalExistingThumbnail = ref(null);
 
 function openSectionEdit(section) {
     editingSectionTitle.value = section.title;
@@ -758,26 +808,42 @@ async function saveSectionTitle() {
     } catch (_) {}
 }
 
-function openModuleEdit(mod) {
-    editingModuleTitle.value = mod.title;
-    editingModuleShowTitleOnCover.value = mod.show_title_on_cover !== false;
-    editingModuleRelatedProductId.value = mod.related_product_id ?? null;
-    editingModuleAccessType.value = mod.access_type ?? 'paid';
-    editingModuleExternalUrl.value = mod.external_url ?? '';
-    if (mod.release_at_date) {
-        editingModuleReleaseMode.value = 'date';
-        editingModuleReleaseAtDate.value = mod.release_at_date;
-        editingModuleReleaseAfterDays.value = '';
-    } else if (mod.release_after_days) {
-        editingModuleReleaseMode.value = 'days';
-        editingModuleReleaseAfterDays.value = String(mod.release_after_days);
-        editingModuleReleaseAtDate.value = '';
+function fillModuleModalFromModule(mod) {
+    if (mod.external_url) {
+        moduleModalSectionType.value = 'external_links';
+    } else if (mod.related_product_id) {
+        moduleModalSectionType.value = 'products';
     } else {
-        editingModuleReleaseMode.value = 'none';
-        editingModuleReleaseAfterDays.value = '';
-        editingModuleReleaseAtDate.value = '';
+        moduleModalSectionType.value = 'courses';
     }
-    startEditModule(mod.id);
+    moduleModalCoverMode.value = mod.cover_mode ?? 'vertical';
+    moduleModalTitle.value = mod.title ?? '';
+    moduleModalShowTitleOnCover.value = mod.show_title_on_cover !== false;
+    moduleModalRelatedProductId.value = mod.related_product_id ?? null;
+    moduleModalAccessType.value = mod.access_type ?? 'paid';
+    moduleModalExternalUrl.value = mod.external_url ?? '';
+    if (mod.release_at_date) {
+        moduleModalReleaseMode.value = 'date';
+        moduleModalReleaseAtDate.value = mod.release_at_date;
+        moduleModalReleaseAfterDays.value = '';
+    } else if (mod.release_after_days) {
+        moduleModalReleaseMode.value = 'days';
+        moduleModalReleaseAfterDays.value = String(mod.release_after_days);
+        moduleModalReleaseAtDate.value = '';
+    } else {
+        moduleModalReleaseMode.value = 'none';
+        moduleModalReleaseAfterDays.value = '';
+        moduleModalReleaseAtDate.value = '';
+    }
+    moduleModalExistingThumbnail.value = mod.thumbnail ?? null;
+}
+
+function openModuleEdit(mod) {
+    moduleModalEditingId.value = mod.id;
+    moduleModalSectionId.value = null;
+    fillModuleModalFromModule(mod);
+    clearModuleModalFile();
+    moduleModalOpen.value = true;
 }
 
 async function saveModuleTitle() {
@@ -1001,6 +1067,11 @@ function removeFavicon() {
 function reload() {
     const url = new URL(window.location.href);
     url.searchParams.set('tab', activeTab.value);
+    if (modulosSelectedModuleId.value != null && modulosSelectedModuleId.value !== '') {
+        url.searchParams.set('moduleId', String(modulosSelectedModuleId.value));
+    } else {
+        url.searchParams.delete('moduleId');
+    }
     window.location.href = url.toString();
 }
 
@@ -1119,6 +1190,7 @@ async function deleteSection(sectionId) {
     });
 }
 function openModuleModal() {
+    moduleModalEditingId.value = null;
     moduleModalSectionId.value = null;
     moduleModalSectionType.value = 'courses';
     moduleModalCoverMode.value = 'vertical';
@@ -1130,6 +1202,7 @@ function openModuleModal() {
     moduleModalReleaseMode.value = 'none';
     moduleModalReleaseAfterDays.value = '';
     moduleModalReleaseAtDate.value = '';
+    moduleModalExistingThumbnail.value = null;
     clearModuleModalFile();
     moduleModalOpen.value = true;
 }
@@ -1153,10 +1226,51 @@ function onModuleModalFileChange(event) {
 function closeModuleModal() {
     moduleModalOpen.value = false;
     moduleModalSectionId.value = null;
+    moduleModalEditingId.value = null;
+    moduleModalExistingThumbnail.value = null;
     clearModuleModalFile();
 }
 
-async function confirmNewModule() {
+function buildModuleModalPayload() {
+    const title = moduleModalTitle.value?.trim();
+    const sectionType = moduleModalSectionType.value;
+    const payload = { title };
+    if (sectionType === 'courses') {
+        payload.show_title_on_cover = moduleModalShowTitleOnCover.value;
+        if (moduleModalReleaseMode.value === 'days') {
+            const days = parseInt(moduleModalReleaseAfterDays.value, 10);
+            payload.release_after_days = Number.isFinite(days) && days > 0 ? days : null;
+            payload.release_at_date = null;
+        } else if (moduleModalReleaseMode.value === 'date') {
+            payload.release_at_date = moduleModalReleaseAtDate.value?.trim() || null;
+            payload.release_after_days = null;
+        } else {
+            payload.release_after_days = null;
+            payload.release_at_date = null;
+        }
+    } else if (sectionType === 'products') {
+        payload.related_product_id = moduleModalRelatedProductId.value;
+        payload.access_type = moduleModalAccessType.value;
+        payload.show_title_on_cover = moduleModalShowTitleOnCover.value;
+    } else {
+        payload.external_url = moduleModalExternalUrl.value?.trim() ?? '';
+        payload.show_title_on_cover = moduleModalShowTitleOnCover.value;
+    }
+    return payload;
+}
+
+async function uploadModuleModalCover(moduleId) {
+    const hasCoverFile = moduleModalFile.value && moduleModalFile.value.type.startsWith('image/');
+    if (!hasCoverFile) return null;
+    const formData = new FormData();
+    formData.append('file', moduleModalFile.value);
+    const up = await axios.post(uploadUrl.value, formData, { headers: uploadHeaders() });
+    if (!up.data?.url) return null;
+    await axios.put(`${base.value}/modules/${moduleId}`, { thumbnail: up.data.url }, { headers: headers() });
+    return up.data.url;
+}
+
+async function confirmModuleModal() {
     const title = moduleModalTitle.value?.trim();
     if (!title) return;
     const sectionType = moduleModalSectionType.value;
@@ -1164,50 +1278,41 @@ async function confirmNewModule() {
     if (sectionType === 'external_links' && !moduleModalExternalUrl.value?.trim()) return;
     moduleModalSaving.value = true;
     try {
-        let payload = { title };
-        if (sectionType === 'courses') {
-            payload.show_title_on_cover = moduleModalShowTitleOnCover.value;
-            if (moduleModalReleaseMode.value === 'days') {
-                const days = parseInt(moduleModalReleaseAfterDays.value, 10);
-                payload.release_after_days = Number.isFinite(days) && days > 0 ? days : null;
-                payload.release_at_date = null;
-            } else if (moduleModalReleaseMode.value === 'date') {
-                payload.release_at_date = moduleModalReleaseAtDate.value?.trim() || null;
-                payload.release_after_days = null;
-            } else {
-                payload.release_after_days = null;
-                payload.release_at_date = null;
+        const payload = buildModuleModalPayload();
+        const editingId = moduleModalEditingId.value;
+
+        if (editingId) {
+            await axios.put(`${base.value}/modules/${editingId}`, payload, { headers: headers() });
+            const thumbUrl = await uploadModuleModalCover(editingId);
+            const mod = findModuleById(editingId);
+            if (mod) {
+                Object.assign(mod, payload);
+                if (thumbUrl) mod.thumbnail = thumbUrl;
             }
-        } else if (sectionType === 'products') {
-            payload.related_product_id = moduleModalRelatedProductId.value;
-            payload.access_type = moduleModalAccessType.value;
-            payload.show_title_on_cover = moduleModalShowTitleOnCover.value;
-        } else {
-            payload.external_url = moduleModalExternalUrl.value?.trim() ?? '';
-            payload.show_title_on_cover = moduleModalShowTitleOnCover.value;
+            previewKey.value++;
+            closeModuleModal();
+            return;
         }
+
         const { data } = await axios.post(`${base.value}/modules`, payload, { headers: headers() });
         const imported = Array.isArray(data?.modules) && data.modules.length ? data.modules : data?.module ? [data.module] : [];
         if (!imported.length) {
             reload();
             return;
         }
-        const hasCoverFile = moduleModalFile.value && moduleModalFile.value.type.startsWith('image/');
-        if (hasCoverFile && imported.length === 1) {
-            let newModule = imported[0];
-            const formData = new FormData();
-            formData.append('file', moduleModalFile.value);
-            const up = await axios.post(uploadUrl.value, formData, { headers: uploadHeaders() });
-            if (up.data?.url) {
-                await axios.put(`${base.value}/modules/${newModule.id}`, { thumbnail: up.data.url }, { headers: headers() });
-                newModule = { ...newModule, thumbnail: up.data.url };
-                imported[0] = newModule;
+        if (imported.length === 1) {
+            const thumbUrl = await uploadModuleModalCover(imported[0].id);
+            if (thumbUrl) {
+                imported[0] = { ...imported[0], thumbnail: thumbUrl };
             }
         }
         if (!props.produto.modules) props.produto.modules = [];
         for (const newModule of imported) {
             props.produto.modules.push(newModule);
             expandedModules.value = new Set([...expandedModules.value, newModule.id]);
+        }
+        if (imported.length === 1) {
+            selectModuleForAulas(imported[0].id);
         }
         previewKey.value++;
         closeModuleModal();
@@ -1251,6 +1356,7 @@ async function duplicateModule(moduleId) {
         if (!props.produto.modules) props.produto.modules = [];
         props.produto.modules.push(mod);
         expandedModules.value = new Set([...expandedModules.value, mod.id]);
+        selectModuleForAulas(mod.id);
         previewKey.value++;
     } catch (_) {
         reload();
@@ -1265,10 +1371,14 @@ async function duplicateLesson(lessonId) {
             reload();
             return;
         }
-        const module = (props.produto.modules ?? []).find((m) => (m.lessons ?? []).some((l) => l.id === lessonId));
+        const module =
+            modulosSelectedModule.value
+            ?? (props.produto.modules ?? []).find((m) => (m.lessons ?? []).some((l) => l.id == lessonId));
         if (module) {
-            if (!module.lessons) module.lessons = [];
-            module.lessons.push(lesson);
+            module.lessons = [...(module.lessons ?? []), lesson];
+        } else {
+            reload();
+            return;
         }
         previewKey.value++;
     } catch (_) {
@@ -1291,6 +1401,49 @@ async function removeInternalProduct(internalProductId) {
         reload();
     } catch (_) {}
 }
+
+const recommendedProductSelectId = ref('');
+const recommendedProductsSaving = ref(false);
+
+const availableRecommendedProducts = computed(() => {
+    const added = new Set((props.produto.recommended_products ?? []).map((r) => String(r.recommended_product_id)));
+    return (props.tenant_products ?? []).filter((p) => !added.has(String(p.id)));
+});
+
+async function addRecommendedProduct() {
+    const id = recommendedProductSelectId.value;
+    if (!id || recommendedProductsSaving.value) return;
+    recommendedProductsSaving.value = true;
+    try {
+        const { data } = await axios.post(
+            `${base.value}/recommended-products`,
+            { recommended_product_id: id },
+            { headers: headers() }
+        );
+        if (!props.produto.recommended_products) {
+            props.produto.recommended_products = [];
+        }
+        const row = data?.recommended_product;
+        if (row && !props.produto.recommended_products.some((r) => String(r.recommended_product_id) === String(row.recommended_product_id))) {
+            props.produto.recommended_products.push(row);
+        }
+        recommendedProductSelectId.value = '';
+    } catch (e) {
+        alert(e?.response?.data?.message ?? 'Não foi possível adicionar o curso.');
+    } finally {
+        recommendedProductsSaving.value = false;
+    }
+}
+
+async function removeRecommendedProduct(rowId) {
+    try {
+        await axios.delete(`${base.value}/recommended-products/${rowId}`, { headers: headers() });
+        props.produto.recommended_products = (props.produto.recommended_products ?? []).filter((r) => r.id !== rowId);
+    } catch (_) {
+        reload();
+    }
+}
+
 // Modal Nova/Editar turma
 const turmaModalOpen = ref(false);
 const turmaModalName = ref('');
@@ -2419,6 +2572,66 @@ const inputClass = 'block w-full rounded-lg border border-zinc-300 bg-white px-3
                         </div>
                     </template>
 
+                    <template v-else-if="activeTab === 'recomendados'">
+                        <div class="mx-auto max-w-2xl space-y-6">
+                            <div>
+                                <h2 class="mb-1 text-sm font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Cursos recomendados no hub</h2>
+                                <p class="text-sm text-zinc-600 dark:text-zinc-400">
+                                    Quando um aluno já possui este curso, os cursos abaixo aparecem primeiro em
+                                    <strong class="font-medium text-zinc-800 dark:text-zinc-200">/area-membros</strong>
+                                    (seção «Recomendados para você»), antes dos demais upsells.
+                                </p>
+                                <p class="mt-2 text-xs text-zinc-500 dark:text-zinc-400">
+                                    Diferente da <strong>Loja interna</strong>, que exibe ofertas dentro da área deste curso para quem já está matriculado.
+                                </p>
+                            </div>
+                            <div class="flex flex-col gap-3 sm:flex-row sm:items-end">
+                                <div class="min-w-0 flex-1">
+                                    <label class="mb-1.5 block text-xs font-medium text-zinc-600 dark:text-zinc-400">Adicionar curso</label>
+                                    <select
+                                        v-model="recommendedProductSelectId"
+                                        :class="inputClass"
+                                        class="w-full"
+                                        :disabled="!availableRecommendedProducts.length || recommendedProductsSaving"
+                                    >
+                                        <option value="">Selecione um curso…</option>
+                                        <option v-for="p in availableRecommendedProducts" :key="p.id" :value="p.id">{{ p.name }}</option>
+                                    </select>
+                                </div>
+                                <Button
+                                    type="button"
+                                    class="shrink-0"
+                                    :disabled="!recommendedProductSelectId || recommendedProductsSaving"
+                                    @click="addRecommendedProduct"
+                                >
+                                    Adicionar
+                                </Button>
+                            </div>
+                            <ul v-if="(produto.recommended_products ?? []).length" class="space-y-2">
+                                <li
+                                    v-for="rp in produto.recommended_products"
+                                    :key="rp.id"
+                                    class="flex items-center justify-between gap-3 rounded-xl border border-zinc-200 bg-zinc-50/80 px-4 py-3 text-sm dark:border-zinc-700 dark:bg-zinc-800/50"
+                                >
+                                    <span class="min-w-0 truncate font-medium text-zinc-900 dark:text-white">
+                                        {{ rp.recommended_product?.name ?? '#' + rp.recommended_product_id }}
+                                    </span>
+                                    <button
+                                        type="button"
+                                        class="shrink-0 rounded-lg p-2 text-zinc-500 transition hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-950/40 dark:hover:text-red-400"
+                                        title="Remover"
+                                        @click="removeRecommendedProduct(rp.id)"
+                                    >
+                                        <Trash2 class="h-4 w-4" />
+                                    </button>
+                                </li>
+                            </ul>
+                            <p v-else class="rounded-xl border border-dashed border-zinc-200 py-10 text-center text-sm text-zinc-500 dark:border-zinc-600 dark:text-zinc-400">
+                                Nenhum curso recomendado configurado.
+                            </p>
+                        </div>
+                    </template>
+
                     <template v-else-if="activeTab === 'comentarios'">
                         <div class="flex flex-col gap-6 lg:flex-row lg:gap-8">
                             <!-- Coluna esquerda: configurações -->
@@ -3059,7 +3272,7 @@ const inputClass = 'block w-full rounded-lg border border-zinc-300 bg-white px-3
             >
                 <div class="w-full max-w-sm overflow-hidden rounded-xl bg-white shadow-xl dark:bg-zinc-900" @click.stop>
                     <div class="border-b border-zinc-200 px-4 py-3 dark:border-zinc-700">
-                        <h3 class="text-lg font-semibold text-zinc-900 dark:text-zinc-100">Novo módulo</h3>
+                        <h3 class="text-lg font-semibold text-zinc-900 dark:text-zinc-100">{{ moduleModalEditingId ? 'Editar módulo' : 'Novo módulo' }}</h3>
                     </div>
                     <div class="space-y-4 p-4">
                         <div>
@@ -3115,6 +3328,14 @@ const inputClass = 'block w-full rounded-lg border border-zinc-300 bg-white px-3
                                     <div class="flex-1 min-w-0">
                                         <p class="truncate text-xs text-zinc-600 dark:text-zinc-400">{{ moduleModalFile?.name }}</p>
                                         <Button type="button" size="sm" variant="ghost" class="mt-1 !py-0.5 !text-xs text-red-600" @click="clearModuleModalFile">Remover</Button>
+                                    </div>
+                                </div>
+                                <div v-else-if="moduleModalExistingThumbnail" class="flex items-start gap-3">
+                                    <div :class="moduleModalCoverMode === 'horizontal' ? 'aspect-video w-28 shrink-0' : 'aspect-[2/3] h-20 w-14 shrink-0'" class="overflow-hidden rounded-lg border border-zinc-200 dark:border-zinc-600">
+                                        <img :src="moduleModalExistingThumbnail" alt="Capa atual" class="h-full w-full object-cover" />
+                                    </div>
+                                    <div class="flex-1 min-w-0">
+                                        <Button type="button" size="sm" variant="outline" class="w-full !py-2 !text-xs" @click="moduleModalFileInputRef?.click()">Trocar imagem</Button>
                                     </div>
                                 </div>
                                 <Button v-else type="button" size="sm" variant="outline" class="w-full !py-2 !text-xs" @click="moduleModalFileInputRef?.click()">
@@ -3204,10 +3425,10 @@ const inputClass = 'block w-full rounded-lg border border-zinc-300 bg-white px-3
                     <div class="flex justify-end gap-2 border-t border-zinc-200 px-4 py-3 dark:border-zinc-700">
                         <Button variant="outline" @click="closeModuleModal">Cancelar</Button>
                         <Button
-                            @click="confirmNewModule"
+                            @click="confirmModuleModal"
                             :disabled="moduleModalSaving || !moduleModalTitle?.trim() || (moduleModalSectionType === 'products' && !moduleModalRelatedProductId) || (moduleModalSectionType === 'external_links' && !moduleModalExternalUrl?.trim())"
                         >
-                            Criar
+                            {{ moduleModalEditingId ? 'Salvar' : 'Criar' }}
                         </Button>
                     </div>
                 </div>

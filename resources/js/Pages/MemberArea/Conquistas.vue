@@ -1,5 +1,6 @@
 <script setup>
-import { Head, Link } from '@inertiajs/vue3';
+import { Link } from '@inertiajs/vue3';
+import StudentAreaDocumentHead from '@/components/student/StudentAreaDocumentHead.vue';
 import { LayoutGrid, Trophy } from 'lucide-vue-next';
 
 defineProps({
@@ -10,7 +11,7 @@ defineProps({
 
 <template>
     <div class="min-h-screen bg-zinc-50 p-6 dark:bg-zinc-950" :style="{ '--student-primary': student_branding?.primary || '#0ea5e9' }">
-        <Head title="Conquistas" />
+        <StudentAreaDocumentHead title="Conquistas" :student_branding="student_branding" />
         <Link href="/area-membros" class="mb-6 inline-flex items-center gap-2 text-sm text-zinc-600 hover:text-[var(--student-primary)]">
             <LayoutGrid class="h-4 w-4" /> Voltar aos cursos
         </Link>

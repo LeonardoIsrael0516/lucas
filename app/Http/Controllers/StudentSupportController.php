@@ -71,7 +71,7 @@ class StudentSupportController extends Controller
 
     private function studentBrandingPayload(int $tenantId): array
     {
-        return \App\Support\StudentAreaBranding::forTenant($tenantId);
+        return \App\Support\StudentAreaBranding::forUser(auth()->user());
     }
 
     private function safeUnreadNotificationsCount(?\App\Models\User $user): int

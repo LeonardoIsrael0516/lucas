@@ -1,9 +1,11 @@
 <script setup>
 import { ref, computed } from 'vue';
 import { useStudentAreaTheme, resolveStudentAreaLogoUrl } from '@/composables/useStudentAreaLogo';
-import { Head, useForm, Link } from '@inertiajs/vue3';
+import { useForm, Link } from '@inertiajs/vue3';
+import StudentAreaDocumentHead from '@/components/student/StudentAreaDocumentHead.vue';
 import Button from '@/components/ui/Button.vue';
 import ThemeToggler from '@/components/layout/ThemeToggler.vue';
+import StudentAreaBackToPanelLink from '@/components/student/StudentAreaBackToPanelLink.vue';
 import { Award, Camera, Lock, Loader2, LayoutGrid, MessageCircle, LifeBuoy, LogOut, Trophy, UserRound, Bell } from 'lucide-vue-next';
 
 const props = defineProps({
@@ -88,7 +90,7 @@ const headerLogoUrl = computed(() => resolveStudentAreaLogoUrl(props.student_bra
         class="flex min-h-screen bg-zinc-50 text-zinc-900 dark:bg-zinc-950 dark:text-zinc-100"
         :style="{ '--student-primary': student_branding?.primary || '#0ea5e9' }"
     >
-        <Head title="Meu perfil" />
+        <StudentAreaDocumentHead title="Meu perfil" :student_branding="student_branding" />
 
         <aside class="hidden w-56 shrink-0 flex-col border-r border-zinc-200 bg-white py-6 dark:border-zinc-800 dark:bg-zinc-900 md:flex">
             <div class="mb-8 px-4">
@@ -106,6 +108,7 @@ const headerLogoUrl = computed(() => resolveStudentAreaLogoUrl(props.student_bra
                     <LayoutGrid class="h-5 w-5 shrink-0" />
                     Meus cursos
                 </Link>
+                <StudentAreaBackToPanelLink />
                 <span class="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-zinc-600 dark:text-zinc-400">
                     <UserRound class="h-5 w-5 shrink-0" />
                     Meu perfil
@@ -165,6 +168,7 @@ const headerLogoUrl = computed(() => resolveStudentAreaLogoUrl(props.student_bra
                 <div class="flex h-14 items-center justify-between gap-3 px-4 md:px-6">
                     <h1 class="text-base font-semibold text-zinc-900 dark:text-white">Meu perfil</h1>
                     <div class="flex shrink-0 items-center gap-2">
+                        <StudentAreaBackToPanelLink variant="header" />
                         <span class="relative inline-flex rounded-lg p-2 text-zinc-600 dark:text-zinc-400" title="Notificações" role="status">
                             <Bell class="h-5 w-5" />
                             <span

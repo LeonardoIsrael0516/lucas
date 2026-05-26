@@ -1,8 +1,8 @@
 <script setup>
 import { ref, watch } from 'vue';
 import { useForm, Link, router } from '@inertiajs/vue3';
+import StudentAreaDocumentHead from '@/components/student/StudentAreaDocumentHead.vue';
 import axios from 'axios';
-import { Head, Link } from '@inertiajs/vue3';
 import Button from '@/components/ui/Button.vue';
 import { MessageSquare, ImagePlus, X, Heart, MessageCircle, Trash2, LayoutGrid } from 'lucide-vue-next';
 import { getCommunityPageIconComponent } from '@/utils/communityPageIcons';
@@ -114,7 +114,7 @@ async function submitComment(post) {
 
 <template>
     <div class="min-h-screen bg-zinc-50 p-4 dark:bg-zinc-950" :style="{ '--student-primary': student_branding?.primary || '#0ea5e9', '--ma-primary': student_branding?.primary || '#0ea5e9' }">
-        <Head :title="page.title" />
+        <StudentAreaDocumentHead :title="page.title" :student_branding="student_branding" />
         <Link href="/area-membros" class="mb-4 inline-flex items-center gap-2 text-sm text-zinc-600"><LayoutGrid class="h-4 w-4" /> Meus cursos</Link>
     <div class="flex flex-col gap-6 lg:flex-row lg:gap-8">
         <!-- Sidebar: lista de páginas -->

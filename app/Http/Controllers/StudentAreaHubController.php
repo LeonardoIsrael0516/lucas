@@ -38,7 +38,7 @@ class StudentAreaHubController extends Controller
         $tenantId = StudentAreaTenant::idForUser($user);
 
         return array_merge([
-            'student_branding' => StudentAreaBranding::forTenant($tenantId),
+            'student_branding' => StudentAreaBranding::forUser($user),
             'hub_nav' => [
                 'community_enabled' => StudentAreaSettings::communityEnabled($tenantId),
                 'certificate_enabled' => StudentAreaSettings::certificateEnabled($tenantId),

@@ -559,6 +559,11 @@ class Product extends Model
         return $this->hasMany(MemberInternalProduct::class)->orderBy('position');
     }
 
+    public function productRecommendedProducts(): HasMany
+    {
+        return $this->hasMany(ProductRecommendedProduct::class)->orderBy('position');
+    }
+
     public function memberTurmas(): HasMany
     {
         return $this->hasMany(MemberTurma::class)->orderBy('position');

@@ -1,8 +1,10 @@
 <script setup>
 import { computed, ref, toRef } from 'vue';
-import { Head, Link, router } from '@inertiajs/vue3';
+import { Link, router } from '@inertiajs/vue3';
+import StudentAreaDocumentHead from '@/components/student/StudentAreaDocumentHead.vue';
 import ThemeToggler from '@/components/layout/ThemeToggler.vue';
 import StudentCourseCover from '@/components/student/StudentCourseCover.vue';
+import StudentAreaBackToPanelLink from '@/components/student/StudentAreaBackToPanelLink.vue';
 import { useStudentAreaSidebarLogo } from '@/composables/useStudentAreaLogo';
 import { Award, Bell, BookOpen, ChevronRight, LayoutGrid, LifeBuoy, Lock, LogOut, MessageCircle, Search, Trophy, UserRound } from 'lucide-vue-next';
 
@@ -12,6 +14,7 @@ const props = defineProps({
     notifications_unread_count: { type: Number, default: 0 },
     continue_items: { type: Array, default: () => [] },
     my_courses: { type: Array, default: () => [] },
+    recommended_courses: { type: Array, default: () => [] },
     other_courses: { type: Array, default: () => [] },
     hub_nav: {
         type: Object,
@@ -54,7 +57,7 @@ function lessonProgressBar(item) {
         class="flex min-h-screen bg-zinc-50 text-zinc-900 dark:bg-zinc-950 dark:text-zinc-100"
         :style="{ '--student-primary': student_branding?.primary || '#0ea5e9' }"
     >
-        <Head title="Meus cursos" />
+        <StudentAreaDocumentHead title="Meus cursos" :student_branding="student_branding" />
 
         <aside
             class="hidden shrink-0 flex-col border-r border-zinc-200 bg-white py-6 transition-all dark:border-zinc-800 dark:bg-zinc-900 md:flex"
@@ -91,6 +94,7 @@ function lessonProgressBar(item) {
                     <LayoutGrid class="h-5 w-5 shrink-0" />
                     <span v-if="!sidebarCollapsed">Meus cursos</span>
                 </a>
+                <StudentAreaBackToPanelLink :collapsed="sidebarCollapsed" />
                 <Link
                     v-if="profile_href"
                     :href="profile_href"
@@ -176,6 +180,7 @@ function lessonProgressBar(item) {
                         </div>
                     </form>
                     <div class="flex shrink-0 items-center gap-2">
+                        <StudentAreaBackToPanelLink variant="header" />
                         <span class="relative inline-flex rounded-lg p-2 text-zinc-600 dark:text-zinc-400" title="Notificações" role="status">
                             <Bell class="h-5 w-5" />
                             <span v-if="hasUnread" class="absolute right-1 top-1 h-2 w-2 rounded-full bg-red-500 ring-2 ring-white dark:ring-zinc-900" />
@@ -274,8 +279,32 @@ function lessonProgressBar(item) {
                     <p v-else class="text-sm text-zinc-500 dark:text-zinc-400">Nenhum curso encontrado{{ search_query ? ' para esta busca' : '' }}.</p>
                 </section>
 
+                <section v-if="recommended_courses.length" class="mb-10">
+                    <h2 class="mb-4 text-lg font-semibold text-zinc-900 dark:text-white">Recomendados para você</h2>
+                    <div class="grid gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
+                        <div v-for="c in recommended_courses" :key="'rec-' + c.id" class="flex flex-col overflow-hidden rounded-xl border border-sky-200 bg-white shadow-sm dark:border-sky-900/50 dark:bg-zinc-900">
+                            <StudentCourseCover :src="c.cover_url" :alt="c.name" img-class="opacity-70">
+                                <span class="absolute left-2 top-2 rounded-full bg-sky-600 px-2 py-0.5 text-xs font-semibold text-white">Recomendado</span>
+                                <div class="absolute inset-0 flex items-center justify-center">
+                                    <Lock class="h-14 w-14 text-white/50" />
+                                </div>
+                            </StudentCourseCover>
+                            <div class="flex flex-1 flex-col p-4">
+                                <h3 class="font-semibold text-zinc-900 dark:text-white">{{ c.name }}</h3>
+                                <p class="mt-2 text-sm font-semibold text-red-600 dark:text-red-400">{{ c.price_label }}</p>
+                                <a
+                                    :href="c.checkout_url"
+                                    class="mt-4 inline-flex items-center justify-center rounded-lg border-2 border-amber-600 px-4 py-2.5 text-sm font-medium text-amber-700 transition hover:bg-amber-50 dark:border-amber-500 dark:text-amber-400 dark:hover:bg-amber-950/40"
+                                >
+                                    Adquirir acesso
+                                </a>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
                 <section>
-                    <h2 class="mb-4 text-lg font-semibold text-zinc-900 dark:text-white">Outros cursos disponíveis</h2>
+                    <h2 v-if="other_courses.length || !recommended_courses.length" class="mb-4 text-lg font-semibold text-zinc-900 dark:text-white">Outros cursos disponíveis</h2>
                     <div v-if="other_courses.length" class="grid gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
                         <div v-for="c in other_courses" :key="c.id" class="flex flex-col overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
                             <StudentCourseCover :src="c.cover_url" :alt="c.name" img-class="opacity-70">
@@ -295,7 +324,7 @@ function lessonProgressBar(item) {
                             </div>
                         </div>
                     </div>
-                    <p v-else class="text-sm text-zinc-500 dark:text-zinc-400">Não há outros cursos disponíveis no momento.</p>
+                    <p v-else-if="!recommended_courses.length" class="text-sm text-zinc-500 dark:text-zinc-400">Não há outros cursos disponíveis no momento.</p>
                 </section>
             </main>
 

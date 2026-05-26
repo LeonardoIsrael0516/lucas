@@ -1,8 +1,11 @@
 @php
     $path = request()->path();
     $isMemberArea = str_starts_with($path, 'm/') || request()->attributes->get('member_area_slug');
+    $isStudentHub = str_starts_with($path, 'area-membros')
+        || str_starts_with($path, 'suporte')
+        || $path === 'meu-perfil';
     $isCheckout = str_starts_with($path, 'c/') || str_starts_with($path, 'checkout') || str_starts_with($path, 'api-checkout');
-    $skipPanelPwa = $isMemberArea || $isCheckout;
+    $skipPanelPwa = $isMemberArea || $isCheckout || $isStudentHub;
 @endphp
 <!DOCTYPE html>
 <html lang="{{ str_replace('_', '-', app()->getLocale()) }}">

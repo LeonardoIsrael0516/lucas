@@ -44,7 +44,7 @@ class ProfileController extends Controller
 
             // Branding for student sidebar (same source as /area-membros).
             try {
-                $studentBranding = StudentAreaBranding::forTenant($tenantId);
+                $studentBranding = StudentAreaBranding::forUser($user);
             } catch (\Throwable) {
                 $studentBranding = StudentAreaBranding::forTenant(null);
             }

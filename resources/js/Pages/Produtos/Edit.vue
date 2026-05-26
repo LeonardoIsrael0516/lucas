@@ -16,7 +16,6 @@ import {
     ShoppingCart,
     Link2,
     Users,
-    Handshake,
     Copy,
     Check,
     Smartphone,
@@ -243,10 +242,14 @@ const BASE_TABS = [
     { id: 'upsell_downsell', label: 'Upsell / Downsell', icon: ArrowUpDown },
     { id: 'checkout', label: 'Checkout', icon: ShoppingCart },
     { id: 'links', label: 'Links', icon: Link2 },
-    { id: 'coproducao', label: 'Co-produção', icon: Handshake },
-    { id: 'afiliados', label: 'Afiliados', icon: Users },
     { id: 'member_builder', label: 'Conteúdo do curso', icon: LayoutGrid, linkOnly: true },
 ];
+
+const HIDDEN_PRODUCT_TYPES = ['aplicativo', 'area_membros_externa'];
+
+const visibleProductTypes = computed(() =>
+    (props.productTypes || []).filter((t) => !HIDDEN_PRODUCT_TYPES.includes(t.value))
+);
 
 const props = defineProps({
     produto: { type: Object, required: true },
@@ -2051,38 +2054,6 @@ function submit() {
                                     </p>
                                 </div>
                             </div>
-                            <!-- Criptomoeda -->
-                            <div class="rounded-xl border border-zinc-200/80 bg-zinc-50/50 p-5 dark:border-zinc-600/80 dark:bg-zinc-800/50">
-                                <div class="flex flex-col gap-3">
-                                    <div class="flex items-center gap-3">
-                                        <div class="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-white p-2 shadow-sm dark:bg-zinc-700/50">
-                                            <img src="/images/payment-methods/cripto.png" alt="Criptomoeda" class="h-7 w-7 object-contain" @error="($e) => $e.target && ($e.target.style.display = 'none')" />
-                                        </div>
-                                        <div>
-                                            <p class="font-semibold text-zinc-900 dark:text-white">Criptomoeda</p>
-                                            <p class="text-xs text-zinc-500 dark:text-zinc-400">Bitcoin e outras</p>
-                                        </div>
-                                    </div>
-                                    <GatewaySelect
-                                        v-model="form.payment_gateways.crypto"
-                                        :options="gatewayOptions('crypto')"
-                                        placeholder="Nenhum"
-                                        label="Gateway Criptomoeda"
-                                    />
-                                    <button
-                                        v-if="canShowRedundancy(form.payment_gateways.crypto)"
-                                        type="button"
-                                        class="inline-flex items-center gap-1.5 rounded-lg border border-zinc-200 px-3 py-2 text-sm font-medium text-zinc-700 transition hover:border-[var(--color-primary)] hover:bg-[var(--color-primary)]/10 hover:text-[var(--color-primary)] dark:border-zinc-600 dark:text-zinc-300 dark:hover:border-[var(--color-primary)] dark:hover:bg-[var(--color-primary)]/20"
-                                        @click="openRedundancySidebar('crypto')"
-                                    >
-                                        <Layers class="h-4 w-4" />
-                                        Redundância
-                                    </button>
-                                    <p v-if="(gateways_by_method.crypto || []).length === 0" class="text-xs text-zinc-500 dark:text-zinc-400">
-                                        <Link href="/integracoes?tab=gateways" class="text-[var(--color-primary)] hover:underline">Conectar gateway</Link>
-                                    </p>
-                                </div>
-                            </div>
                         </div>
                     </div>
                 </section>
@@ -2096,7 +2067,7 @@ function submit() {
                     <div class="p-6">
                         <div class="grid gap-3 grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
                             <button
-                                v-for="t in productTypes"
+                                v-for="t in visibleProductTypes"
                                 :key="t.value"
                                 type="button"
                                 :disabled="!t.available"
@@ -2137,124 +2108,6 @@ function submit() {
                             </button>
                         </div>
                         <p v-if="form.errors.type" class="mt-2 text-sm text-red-600 dark:text-red-400">{{ form.errors.type }}</p>
-                    </div>
-                </section>
-
-                <!-- Área de membros externa (Cademí) -->
-                <section
-                    v-if="form.type === 'area_membros_externa'"
-                    class="overflow-hidden rounded-2xl border border-zinc-200/80 bg-white shadow-sm dark:border-zinc-700/80 dark:bg-zinc-800/95"
-                >
-                    <div class="border-b border-zinc-200/80 bg-zinc-50/80 px-6 py-4 dark:border-zinc-700/80 dark:bg-zinc-800/50">
-                        <h2 class="text-base font-semibold text-zinc-900 dark:text-white">Área de membros externa (Cademí)</h2>
-                        <p class="mt-0.5 text-sm text-zinc-500 dark:text-zinc-400">
-                            Se este produto for entregue via Cademí, configure aqui qual integração e qual TAG o aluno receberá após o pagamento.
-                        </p>
-                    </div>
-                    <div class="p-6 space-y-4">
-                        <div class="grid gap-4 sm:grid-cols-2">
-                            <div>
-                                <label class="mb-1 block text-sm font-medium text-zinc-700 dark:text-zinc-300">Integração Cademí</label>
-                                <select
-                                    v-model="cademiConfig.integration_id"
-                                    class="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 focus:border-[var(--color-primary)] focus:outline-none focus:ring-1 focus:ring-[var(--color-primary)] dark:border-zinc-600 dark:bg-zinc-800 dark:text-white"
-                                >
-                                    <option value="">(desconectado)</option>
-                                    <option v-for="i in cademi_integrations" :key="i.id" :value="String(i.id)">
-                                        {{ i.name }}
-                                    </option>
-                                </select>
-                                <p v-if="cademi_integrations.length === 0" class="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
-                                    Nenhuma integração Cademí cadastrada. Vá em <Link href="/integracoes" class="text-[var(--color-primary)] hover:underline">/integracoes</Link> e crie uma.
-                                </p>
-                            </div>
-                            <div>
-                                <label class="mb-1 block text-sm font-medium text-zinc-700 dark:text-zinc-300">Produto ID (Cademí)</label>
-                                <div class="space-y-2">
-                                    <div v-for="(pid, idx) in cademiConfig.cademi_produto_ids" :key="idx" class="flex gap-2">
-                                        <input
-                                            v-model="cademiConfig.cademi_produto_ids[idx]"
-                                            type="number"
-                                            min="1"
-                                            placeholder="Ex: 231"
-                                            class="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 focus:border-[var(--color-primary)] focus:outline-none focus:ring-1 focus:ring-[var(--color-primary)] dark:border-zinc-600 dark:bg-zinc-800 dark:text-white"
-                                        />
-                                        <Button type="button" variant="outline" :disabled="cademiConfig.cademi_produto_ids.length <= 1" @click="cademiConfig.cademi_produto_ids.splice(idx, 1)">
-                                            Remover
-                                        </Button>
-                                    </div>
-                                    <Button type="button" variant="outline" @click="cademiConfig.cademi_produto_ids.push('')">
-                                        Adicionar Produto ID
-                                    </Button>
-                                </div>
-                                <p class="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
-                                    Obrigatório para conceder acesso na Cademí.
-                                </p>
-                            </div>
-
-                            <div>
-                                <label class="mb-1 block text-sm font-medium text-zinc-700 dark:text-zinc-300">TAG ID (Cademí) (opcional)</label>
-                                <div class="space-y-2">
-                                    <div class="flex gap-2">
-                                        <select
-                                            v-model="cademiConfig.cademi_tag_id"
-                                            class="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 focus:border-[var(--color-primary)] focus:outline-none focus:ring-1 focus:ring-[var(--color-primary)] dark:border-zinc-600 dark:bg-zinc-800 dark:text-white"
-                                            :disabled="!cademiConfig.integration_id || cademiTagsLoading"
-                                        >
-                                            <option value="">Selecione uma TAG</option>
-                                            <option v-for="t in filteredCademiTags" :key="t.id" :value="String(t.id)">
-                                                {{ t.nome ? `${t.nome} (#${t.id})` : `#${t.id}` }}
-                                            </option>
-                                        </select>
-                                        <Button
-                                            type="button"
-                                            variant="outline"
-                                            :disabled="!cademiConfig.integration_id || cademiTagsLoading"
-                                            @click="loadCademiTags"
-                                        >
-                                            <Loader2 v-if="cademiTagsLoading" class="mr-2 h-4 w-4 animate-spin" />
-                                            Atualizar
-                                        </Button>
-                                    </div>
-
-                                    <input
-                                        v-model="cademiTagQuery"
-                                        type="text"
-                                        placeholder="Buscar TAG pelo nome…"
-                                        class="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 focus:border-[var(--color-primary)] focus:outline-none focus:ring-1 focus:ring-[var(--color-primary)] dark:border-zinc-600 dark:bg-zinc-800 dark:text-white"
-                                        :disabled="!cademiConfig.integration_id || cademiTagsLoading || (cademiTags || []).length === 0"
-                                    />
-
-                                    <input
-                                        v-model="cademiConfig.cademi_tag_id"
-                                        type="number"
-                                        min="1"
-                                        placeholder="Ou cole o TAG ID (ex: 472)"
-                                        class="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 focus:border-[var(--color-primary)] focus:outline-none focus:ring-1 focus:ring-[var(--color-primary)] dark:border-zinc-600 dark:bg-zinc-800 dark:text-white"
-                                        :disabled="!cademiConfig.integration_id"
-                                    />
-
-                                    <p v-if="cademiTagsError" class="text-xs text-red-600 dark:text-red-400">{{ cademiTagsError }}</p>
-                                    <p v-else-if="cademiConfig.integration_id && !cademiTagsLoading && (cademiTags || []).length === 0" class="text-xs text-zinc-500 dark:text-zinc-400">
-                                        Nenhuma TAG retornada pela Cademí (ou integração ainda não carregada).
-                                    </p>
-                                </div>
-                                <p class="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
-                                    Dica: selecione pelo nome (recomendado). Se necessário, cole o ID manualmente no campo acima.
-                                </p>
-                            </div>
-                        </div>
-
-                        <div class="flex items-end">
-                            <Button type="button" class="w-full" :disabled="cademiSaving" @click="saveCademiProductMapping">
-                                <Loader2 v-if="cademiSaving" class="mr-2 h-4 w-4 animate-spin" />
-                                Salvar configuração Cademí
-                            </Button>
-                        </div>
-
-                        <p v-if="cademiError" class="rounded-lg bg-red-100 px-3 py-2 text-sm text-red-700 dark:bg-red-900/30 dark:text-red-300">
-                            {{ cademiError }}
-                        </p>
                     </div>
                 </section>
 
@@ -3344,24 +3197,6 @@ function submit() {
                         </li>
                     </ul>
                 </div>
-            </div>
-        </template>
-
-        <!-- Aba Co-produção -->
-        <template v-if="currentTab === 'coproducao'">
-            <div class="rounded-xl border border-zinc-200 bg-white p-8 dark:border-zinc-700 dark:bg-zinc-800">
-                <Handshake class="mx-auto h-12 w-12 text-zinc-400 dark:text-zinc-500" />
-                <p class="mt-3 text-center font-medium text-zinc-600 dark:text-zinc-400">Co-produção</p>
-                <p class="mt-1 text-center text-sm text-zinc-500 dark:text-zinc-500">Esta funcionalidade será implementada em breve.</p>
-            </div>
-        </template>
-
-        <!-- Aba Afiliados -->
-        <template v-if="currentTab === 'afiliados'">
-            <div class="rounded-xl border border-zinc-200 bg-white p-8 dark:border-zinc-700 dark:bg-zinc-800">
-                <Users class="mx-auto h-12 w-12 text-zinc-400 dark:text-zinc-500" />
-                <p class="mt-3 text-center font-medium text-zinc-600 dark:text-zinc-400">Afiliados</p>
-                <p class="mt-1 text-center text-sm text-zinc-500 dark:text-zinc-500">Esta funcionalidade será implementada em breve.</p>
             </div>
         </template>
 

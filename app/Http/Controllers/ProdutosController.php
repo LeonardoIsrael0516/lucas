@@ -180,12 +180,18 @@ class ProdutosController extends Controller
         };
 
         $rates = config('products.rates', ['brl_eur' => 0.16, 'brl_usd' => 0.18]);
-        $productTypes = collect(Product::typeConfig())->map(fn ($config, $value) => [
-            'value' => $value,
-            'label' => $config['label'],
-            'description' => $config['description'],
-            'available' => $config['available'],
-        ])->values()->all();
+        $hiddenProductTypes = [
+            Product::TYPE_APLICATIVO,
+            Product::TYPE_AREA_MEMBROS_EXTERNA,
+        ];
+        $productTypes = collect(Product::typeConfig())
+            ->reject(fn ($config, $value) => in_array($value, $hiddenProductTypes, true))
+            ->map(fn ($config, $value) => [
+                'value' => $value,
+                'label' => $config['label'],
+                'description' => $config['description'],
+                'available' => $config['available'],
+            ])->values()->all();
 
         $billingTypes = collect(Product::billingTypeLabels())->map(fn ($label, $value) => ['value' => $value, 'label' => $label])->values()->all();
 

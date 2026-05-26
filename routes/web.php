@@ -358,6 +358,8 @@ Route::middleware(['auth', 'admin.tenant', 'role:admin|infoprodutor|team', 'audi
         Route::delete('/produtos/{produto}/member-builder/lessons/{lesson}', [\App\Http\Controllers\MemberBuilderController::class, 'destroyLesson'])->name('member-builder.lessons.destroy');
         Route::post('/produtos/{produto}/member-builder/internal-products', [\App\Http\Controllers\MemberBuilderController::class, 'storeInternalProduct'])->name('member-builder.internal-products.store');
         Route::delete('/produtos/{produto}/member-builder/internal-products/{internalProduct}', [\App\Http\Controllers\MemberBuilderController::class, 'destroyInternalProduct'])->name('member-builder.internal-products.destroy');
+        Route::post('/produtos/{produto}/member-builder/recommended-products', [\App\Http\Controllers\MemberBuilderController::class, 'storeRecommendedProduct'])->name('member-builder.recommended-products.store');
+        Route::delete('/produtos/{produto}/member-builder/recommended-products/{recommendedProduct}', [\App\Http\Controllers\MemberBuilderController::class, 'destroyRecommendedProduct'])->name('member-builder.recommended-products.destroy');
         Route::post('/produtos/{produto}/member-builder/turmas', [\App\Http\Controllers\MemberBuilderController::class, 'storeTurma'])->name('member-builder.turmas.store');
         Route::put('/produtos/{produto}/member-builder/turmas/{turma}', [\App\Http\Controllers\MemberBuilderController::class, 'updateTurma'])->name('member-builder.turmas.update');
         Route::delete('/produtos/{produto}/member-builder/turmas/{turma}', [\App\Http\Controllers\MemberBuilderController::class, 'destroyTurma'])->name('member-builder.turmas.destroy');
@@ -501,7 +503,7 @@ Route::middleware(['auth', 'admin.tenant', 'role:admin|infoprodutor|team', 'audi
 
 });
 
-Route::middleware(['auth', 'role:aluno'])->group(function () {
+Route::middleware(['auth', 'role:aluno|admin'])->group(function () {
     Route::get('/area-membros', [\App\Http\Controllers\MemberAreaController::class, 'index'])->name('member-area.index');
     Route::get('/area-membros/comunidade', [\App\Http\Controllers\StudentAreaHubController::class, 'comunidade'])->name('student-hub.comunidade');
     Route::get('/area-membros/comunidade/{pageSlug}', [\App\Http\Controllers\StudentAreaHubController::class, 'comunidadePage'])->name('student-hub.comunidade.page');

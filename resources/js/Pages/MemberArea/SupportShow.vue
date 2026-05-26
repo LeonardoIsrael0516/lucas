@@ -1,8 +1,10 @@
 <script setup>
 import { computed } from 'vue';
 import { useStudentAreaTheme, resolveStudentAreaLogoUrl } from '@/composables/useStudentAreaLogo';
-import { Head, Link, useForm, usePage } from '@inertiajs/vue3';
+import { Link, useForm, usePage } from '@inertiajs/vue3';
+import StudentAreaDocumentHead from '@/components/student/StudentAreaDocumentHead.vue';
 import ThemeToggler from '@/components/layout/ThemeToggler.vue';
+import StudentAreaBackToPanelLink from '@/components/student/StudentAreaBackToPanelLink.vue';
 import { ArrowLeft, Award, Bell, LayoutGrid, LifeBuoy, LogOut, MessageCircle, Trophy, UserRound } from 'lucide-vue-next';
 
 const page = usePage();
@@ -63,7 +65,7 @@ const headerLogoUrl = computed(() => resolveStudentAreaLogoUrl(props.student_bra
         class="flex min-h-screen bg-zinc-50 text-zinc-900 dark:bg-zinc-950 dark:text-zinc-100"
         :style="{ '--student-primary': student_branding?.primary || '#0ea5e9' }"
     >
-        <Head :title="`Ticket: ${ticket.subject}`" />
+        <StudentAreaDocumentHead :title="`Ticket: ${ticket.subject}`" :student_branding="student_branding" />
 
         <aside class="hidden w-56 shrink-0 flex-col border-r border-zinc-200 bg-white py-6 dark:border-zinc-800 dark:bg-zinc-900 md:flex">
             <div class="mb-8 px-4">
@@ -77,6 +79,7 @@ const headerLogoUrl = computed(() => resolveStudentAreaLogoUrl(props.student_bra
                     <LayoutGrid class="h-5 w-5 shrink-0" />
                     Meus cursos
                 </Link>
+                <StudentAreaBackToPanelLink />
                 <Link v-if="profile_href" :href="profile_href" class="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800">
                     <UserRound class="h-5 w-5 shrink-0" />
                     Meu perfil
@@ -120,6 +123,7 @@ const headerLogoUrl = computed(() => resolveStudentAreaLogoUrl(props.student_bra
                         <h1 class="truncate text-lg font-semibold text-zinc-900 dark:text-white">{{ ticket.subject }}</h1>
                     </div>
                     <div class="flex shrink-0 items-center gap-2">
+                        <StudentAreaBackToPanelLink variant="header" />
                         <span class="relative inline-flex rounded-lg p-2 text-zinc-600 dark:text-zinc-400">
                             <Bell class="h-5 w-5" />
                             <span v-if="hasUnread" class="absolute right-1 top-1 h-2 w-2 rounded-full bg-red-500 ring-2 ring-white dark:ring-zinc-900" />

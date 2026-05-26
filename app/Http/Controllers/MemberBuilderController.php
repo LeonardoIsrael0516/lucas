@@ -7,6 +7,7 @@ use App\Models\MemberComment;
 use App\Models\MemberCommunityPage;
 use App\Models\MemberCommunityPost;
 use App\Models\MemberInternalProduct;
+use App\Models\ProductRecommendedProduct;
 use App\Models\MemberLesson;
 use App\Models\MemberLessonProgress;
 use App\Models\MemberModule;
@@ -135,6 +136,7 @@ class MemberBuilderController extends Controller
             'memberModules.lessons',
             'memberModules.relatedProduct',
             'memberInternalProducts.relatedProduct',
+            'productRecommendedProducts.recommendedProduct',
             'memberTurmas.users:id,name,email',
             'memberCommunityPages',
         ]);
@@ -225,6 +227,16 @@ class MemberBuilderController extends Controller
                     'image_url' => $ip->relatedProduct->image ? app(StorageService::class)->url($ip->relatedProduct->image) : null,
                 ] : null,
             ])->values()->all(),
+            'recommended_products' => $produto->productRecommendedProducts->map(fn (ProductRecommendedProduct $rp) => [
+                'id' => $rp->id,
+                'recommended_product_id' => $rp->recommended_product_id,
+                'position' => $rp->position,
+                'recommended_product' => $rp->recommendedProduct ? [
+                    'id' => $rp->recommendedProduct->id,
+                    'name' => $rp->recommendedProduct->name,
+                    'image_url' => $rp->recommendedProduct->image ? app(StorageService::class)->url($rp->recommendedProduct->image) : null,
+                ] : null,
+            ])->values()->all(),
             'turmas' => $produto->memberTurmas->map(fn (MemberTurma $t) => [
                 'id' => $t->id,
                 'name' => $t->name,
@@ -270,6 +282,8 @@ class MemberBuilderController extends Controller
 
         $tenantProductsQuery = Product::forTenant($produto->tenant_id)
             ->where('id', '!=', $produto->id)
+            ->where('type', Product::TYPE_AREA_MEMBROS)
+            ->where('is_active', true)
             ->orderBy('name');
         if (auth()->user()?->isTeam()) {
             $allowed = app(TeamAccessService::class)->allowedProductIdsFor(auth()->user());
@@ -846,7 +860,7 @@ class MemberBuilderController extends Controller
             $validated['content_url'] = $contentFiles[0]['url'];
         }
         $max = MemberLesson::where('member_module_id', $module->id)->max('position') ?? 0;
-        MemberLesson::create([
+        $lesson = MemberLesson::create([
             'member_module_id' => $module->id,
             'product_id' => $produto->id,
             'title' => $validated['title'],
@@ -865,7 +879,10 @@ class MemberBuilderController extends Controller
             'watermark_enabled' => $request->boolean('watermark_enabled', false),
         ]);
         if ($request->expectsJson()) {
-            return response()->json(['message' => 'Aula criada.']);
+            return response()->json([
+                'message' => 'Aula criada.',
+                'lesson' => $this->lessonJsonPayload($lesson),
+            ]);
         }
         return back()->with('success', 'Aula criada.');
     }
@@ -929,8 +946,12 @@ class MemberBuilderController extends Controller
             }
         }
         $lesson->update($validated);
+        $lesson->refresh();
         if ($request->expectsJson()) {
-            return response()->json(['message' => 'Aula atualizada.']);
+            return response()->json([
+                'message' => 'Aula atualizada.',
+                'lesson' => $this->lessonJsonPayload($lesson),
+            ]);
         }
         return back()->with('success', 'Aula atualizada.');
     }
@@ -1094,21 +1115,7 @@ class MemberBuilderController extends Controller
 
         return response()->json([
             'message' => 'Aula duplicada.',
-            'lesson' => [
-                'id' => $newLesson->id,
-                'title' => $newLesson->title,
-                'position' => $newLesson->position,
-                'type' => $newLesson->type,
-                'content_url' => $newLesson->content_url,
-                'link_title' => $newLesson->link_title,
-                'content_files' => $newLesson->content_files,
-                'release_after_days' => $newLesson->release_after_days,
-                'release_at_date' => $newLesson->release_at_date?->format('Y-m-d'),
-                'content_text' => \App\Support\HtmlSanitizer::sanitize($newLesson->content_text),
-                'duration_seconds' => $newLesson->duration_seconds,
-                'is_free' => $newLesson->is_free,
-                'watermark_enabled' => (bool) ($newLesson->watermark_enabled ?? false),
-            ],
+            'lesson' => $this->lessonJsonPayload($newLesson),
         ]);
     }
 
@@ -1140,6 +1147,65 @@ class MemberBuilderController extends Controller
         }
         $internalProduct->delete();
         return back()->with('success', 'Produto removido da loja interna.');
+    }
+
+    public function storeRecommendedProduct(Request $request, Product $produto): RedirectResponse|JsonResponse
+    {
+        $this->authorizeProduct($produto);
+        $validated = $request->validate(['recommended_product_id' => ['required', 'exists:products,id']]);
+        if ((string) $validated['recommended_product_id'] === (string) $produto->id) {
+            if ($request->expectsJson()) {
+                return response()->json(['message' => 'Não é possível recomendar o próprio produto.'], 422);
+            }
+
+            return back()->with('error', 'Não é possível recomendar o próprio produto.');
+        }
+        $related = Product::find($validated['recommended_product_id']);
+        if (! $related || $related->tenant_id !== $produto->tenant_id) {
+            abort(403);
+        }
+        if ($related->type !== Product::TYPE_AREA_MEMBROS) {
+            if ($request->expectsJson()) {
+                return response()->json(['message' => 'Só é possível recomendar produtos do tipo Área de membros.'], 422);
+            }
+
+            return back()->with('error', 'Só é possível recomendar produtos do tipo Área de membros.');
+        }
+        $max = ProductRecommendedProduct::where('product_id', $produto->id)->max('position') ?? 0;
+        $row = ProductRecommendedProduct::firstOrCreate(
+            ['product_id' => $produto->id, 'recommended_product_id' => $validated['recommended_product_id']],
+            ['position' => $max + 1]
+        );
+        $row->load('recommendedProduct');
+        $payload = [
+            'id' => $row->id,
+            'recommended_product_id' => $row->recommended_product_id,
+            'position' => $row->position,
+            'recommended_product' => $row->recommendedProduct ? [
+                'id' => $row->recommendedProduct->id,
+                'name' => $row->recommendedProduct->name,
+                'image_url' => $row->recommendedProduct->image ? app(StorageService::class)->url($row->recommendedProduct->image) : null,
+            ] : null,
+        ];
+        if ($request->expectsJson()) {
+            return response()->json(['recommended_product' => $payload]);
+        }
+
+        return back()->with('success', 'Curso recomendado adicionado.');
+    }
+
+    public function destroyRecommendedProduct(Request $request, Product $produto, ProductRecommendedProduct $recommendedProduct): RedirectResponse|JsonResponse
+    {
+        $this->authorizeProduct($produto);
+        if ((string) $recommendedProduct->product_id !== (string) $produto->id) {
+            abort(404);
+        }
+        $recommendedProduct->delete();
+        if ($request->expectsJson()) {
+            return response()->json(['ok' => true]);
+        }
+
+        return back()->with('success', 'Curso recomendado removido.');
     }
 
     // Turmas
@@ -1732,6 +1798,28 @@ class MemberBuilderController extends Controller
                 'image_url' => $m->relatedProduct->image ? app(StorageService::class)->url($m->relatedProduct->image) : null,
             ] : null,
         ]));
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function lessonJsonPayload(MemberLesson $lesson): array
+    {
+        return [
+            'id' => $lesson->id,
+            'title' => $lesson->title,
+            'position' => $lesson->position,
+            'type' => $lesson->type,
+            'content_url' => $lesson->content_url,
+            'link_title' => $lesson->link_title,
+            'content_files' => $lesson->content_files,
+            'release_after_days' => $lesson->release_after_days,
+            'release_at_date' => $lesson->release_at_date?->format('Y-m-d'),
+            'content_text' => \App\Support\HtmlSanitizer::sanitize($lesson->content_text),
+            'duration_seconds' => $lesson->duration_seconds,
+            'is_free' => $lesson->is_free,
+            'watermark_enabled' => (bool) ($lesson->watermark_enabled ?? false),
+        ];
     }
 
     private function moduleKind(MemberModule $module): string

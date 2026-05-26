@@ -2,7 +2,9 @@
 
 namespace App\Support;
 
+use App\Models\Product;
 use App\Models\Setting;
+use App\Models\User;
 use Illuminate\Support\Facades\Schema;
 use Plugins\WhiteLabel\ApplyWhiteLabelConfig;
 use Plugins\WhiteLabel\WhiteLabelSetting;
@@ -20,7 +22,8 @@ final class StudentAreaBranding
      *     logo_light_url: ?string,
      *     logo_light_collapsed_url: ?string,
      *     logo_dark_url: ?string,
-     *     logo_dark_collapsed_url: ?string
+     *     logo_dark_collapsed_url: ?string,
+     *     favicon_url: ?string
      * }
      */
     public static function forTenant(?int $tenantId): array
@@ -29,6 +32,9 @@ final class StudentAreaBranding
         $primary = trim($primaryFromSetting) !== '' ? trim($primaryFromSetting) : self::whiteLabelPrimary($tenantId);
 
         [$appLogo, $appLogoDark, $appLogoIcon, $appLogoIconDark] = self::whiteLabelLogoStrings($tenantId);
+        $favicon = self::nonEmptyUrl((string) config('getfy.favicon_url', ''))
+            ?? $appLogoIconDark
+            ?? $appLogoIcon;
 
         return [
             'primary' => $primary,
@@ -37,7 +43,47 @@ final class StudentAreaBranding
             'logo_light_collapsed_url' => $appLogoIcon,
             'logo_dark_url' => $appLogoDark,
             'logo_dark_collapsed_url' => $appLogoIconDark,
+            'favicon_url' => $favicon,
         ];
+    }
+
+    /**
+     * Favicon do hub: prioriza o configurado em um curso que o aluno possui.
+     *
+     * @param  iterable<\App\Models\Product>  $ownedProducts
+     */
+    public static function mergeHubFaviconFromOwnedProducts(array $branding, iterable $ownedProducts): array
+    {
+        foreach ($ownedProducts as $product) {
+            $config = is_array($product->member_area_config) ? $product->member_area_config : [];
+            $url = $config['logos']['favicon'] ?? $config['pwa']['favicon'] ?? null;
+            if (is_string($url) && trim($url) !== '') {
+                $branding['favicon_url'] = trim($url);
+                break;
+            }
+        }
+
+        return $branding;
+    }
+
+    /**
+     * Branding do hub com favicon dos cursos do aluno quando existir.
+     */
+    public static function forUser(?User $user): array
+    {
+        $tenantId = $user !== null ? StudentAreaTenant::idForUser($user) : null;
+
+        $branding = self::forTenant($tenantId);
+        if ($user === null) {
+            return $branding;
+        }
+
+        $owned = $user->products()
+            ->orderBy('name')
+            ->get()
+            ->filter(fn (Product $p) => $p->type === Product::TYPE_AREA_MEMBROS);
+
+        return self::mergeHubFaviconFromOwnedProducts($branding, $owned);
     }
 
     private static function whiteLabelPrimary(?int $tenantId): string

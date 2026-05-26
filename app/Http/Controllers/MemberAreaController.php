@@ -9,6 +9,7 @@ use App\Models\MemberLessonProgress;
 use App\Models\MemberModule;
 use App\Models\Order;
 use App\Models\Product;
+use App\Models\ProductRecommendedProduct;
 use App\Models\Subscription;
 use App\Services\MemberAreaResolver;
 use App\Services\MemberProgressService;
@@ -64,8 +65,9 @@ class MemberAreaController extends Controller
         if (! $tenantId) {
             $tenantId = (int) ($ownedProducts->first()?->tenant_id ?? 0) ?: null;
         }
-        $studentBranding = StudentAreaBranding::forTenant($tenantId);
+        $studentBranding = StudentAreaBranding::forUser($user);
         $ownedIds = $ownedProducts->pluck('id')->all();
+        $recommendedIds = $this->recommendedProductIdsForOwnedCourses($ownedIds);
         $otherQuery = Product::query()
             ->where('tenant_id', $tenantId)
             ->where('type', Product::TYPE_AREA_MEMBROS)
@@ -75,13 +77,13 @@ class MemberAreaController extends Controller
         if ($q !== '') {
             $otherQuery->where('name', 'like', '%'.$q.'%');
         }
-        $otherCourses = [];
+        $upsellCardsById = [];
         foreach ($otherQuery->get() as $product) {
             if (! $product->checkout_slug) {
                 continue;
             }
             $otherStorage = new StorageService($product->tenant_id);
-            $otherCourses[] = [
+            $upsellCardsById[(string) $product->id] = [
                 'id' => $product->id,
                 'name' => $product->name,
                 'image_url' => $product->image ? $otherStorage->url($product->image) : null,
@@ -90,6 +92,7 @@ class MemberAreaController extends Controller
                 'checkout_url' => route('checkout.show', ['slug' => $product->checkout_slug]),
             ];
         }
+        [$recommendedCourses, $otherCourses] = $this->partitionUpsellCourses($upsellCardsById, $recommendedIds);
 
         $hubNav = [
             'community_enabled' => StudentAreaSettings::communityEnabled($tenantId),
@@ -107,6 +110,7 @@ class MemberAreaController extends Controller
             'notifications_unread_count' => $this->safeUnreadNotificationsCount($user),
             'continue_items' => $continueItems,
             'my_courses' => $myCourses,
+            'recommended_courses' => $recommendedCourses,
             'other_courses' => $otherCourses,
             'hub_nav' => $hubNav,
             'profile_href' => route('profile.index'),
@@ -394,6 +398,54 @@ class MemberAreaController extends Controller
         } catch (\Throwable) {
             return 0;
         }
+    }
+
+    /**
+     * @param  array<int|string>  $ownedProductIds
+     * @return list<string>
+     */
+    private function recommendedProductIdsForOwnedCourses(array $ownedProductIds): array
+    {
+        if ($ownedProductIds === []) {
+            return [];
+        }
+
+        $ids = [];
+        $rows = ProductRecommendedProduct::query()
+            ->whereIn('product_id', $ownedProductIds)
+            ->orderBy('product_id')
+            ->orderBy('position')
+            ->get(['recommended_product_id']);
+
+        foreach ($rows as $row) {
+            $id = (string) $row->recommended_product_id;
+            if (! in_array($id, $ids, true)) {
+                $ids[] = $id;
+            }
+        }
+
+        return $ids;
+    }
+
+    /**
+     * @param  array<string, array<string, mixed>>  $upsellCardsById
+     * @param  list<string>  $recommendedIds
+     * @return array{0: list<array<string, mixed>>, 1: list<array<string, mixed>>}
+     */
+    private function partitionUpsellCourses(array $upsellCardsById, array $recommendedIds): array
+    {
+        $recommendedCourses = [];
+        foreach ($recommendedIds as $recommendedId) {
+            if (isset($upsellCardsById[$recommendedId])) {
+                $recommendedCourses[] = $upsellCardsById[$recommendedId];
+                unset($upsellCardsById[$recommendedId]);
+            }
+        }
+
+        $otherCourses = array_values($upsellCardsById);
+        usort($otherCourses, fn (array $a, array $b) => strcasecmp((string) ($a['name'] ?? ''), (string) ($b['name'] ?? '')));
+
+        return [$recommendedCourses, $otherCourses];
     }
 
     private function productCoverUrl(Product $product, StorageService $storage): ?string

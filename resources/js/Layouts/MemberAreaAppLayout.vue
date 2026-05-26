@@ -4,7 +4,9 @@ import { Link, usePage, Head, router } from '@inertiajs/vue3';
 import PwaInstallPrompt from '@/components/member-area/PwaInstallPrompt.vue';
 import MemberAreaNotificationsPanel from '@/components/member-area/MemberAreaNotificationsPanel.vue';
 import Button from '@/components/ui/Button.vue';
-import { Bell, ChevronDown, User, X, Camera, Lock, CheckCircle, AlertCircle, Menu, Trophy } from 'lucide-vue-next';
+import { useBackToPanelLink } from '@/composables/useBackToPanelLink';
+import { pickFaviconUrl } from '@/composables/resolveAssetUrl';
+import { Bell, ChevronDown, User, X, Camera, Lock, CheckCircle, AlertCircle, Menu, Trophy, ArrowLeft } from 'lucide-vue-next';
 
 const page = usePage();
 const props = computed(() => page.props);
@@ -17,6 +19,7 @@ const vapid_public = computed(() => props.value?.vapid_public ?? null);
 const base_url = computed(() => props.value?.base_url ?? '');
 
 const user = computed(() => props.value?.auth?.user ?? null);
+const { showBackToPanel, backToPanelHref, backToPanelLabel } = useBackToPanelLink();
 const theme = computed(() => ({
     ...(config.value?.theme ?? {}),
     primary: appSettings.value?.theme_primary || config.value?.theme?.primary || '#0ea5e9',
@@ -44,10 +47,16 @@ const sidebarItems = computed(() => {
     // Atalho fixo para voltar à lista de cursos do aluno (fora do PWA /m/{slug}).
     const backLink = '/area-membros';
     const exists = base.some((i) => (i?.link || '') === backLink);
-    if (!exists) {
-        return [{ title: 'Meus cursos', icon: 'grid', link: backLink, open_external: true }, ...base];
+    const withCourses = !exists
+        ? [{ title: 'Meus cursos', icon: 'grid', link: backLink, open_external: true }, ...base]
+        : base;
+    if (showBackToPanel.value) {
+        const hasAdminLink = withCourses.some((i) => i?.link === backToPanelHref);
+        if (!hasAdminLink) {
+            return [{ title: backToPanelLabel, icon: 'grid', link: backToPanelHref, open_external: true }, ...withCourses];
+        }
     }
-    return base;
+    return withCourses;
 });
 
 /** Número de itens no nav: sidebar + comunidade (se ativa). Se > 2, em mobile mostra hamburger. */
@@ -274,12 +283,14 @@ onUnmounted(() => {
     window.removeEventListener('scroll', onWindowScroll);
 });
 
-const faviconHref = computed(() => {
-    const url = config.value?.logos?.favicon ?? config.value?.pwa?.favicon ?? null;
-    if (!url || typeof window === 'undefined') return null;
-    if (url.startsWith('http')) return url;
-    return url.startsWith('/') ? `${window.location.origin}${url}` : `${window.location.origin}/${url.replace(/^\//, '')}`;
-});
+const faviconHref = computed(() => pickFaviconUrl(
+    config.value?.logos?.favicon,
+    config.value?.pwa?.favicon,
+    appSettings.value?.favicon_url,
+    appSettings.value?.pwa_icon_192,
+    appSettings.value?.app_logo_icon_dark,
+    appSettings.value?.app_logo_icon,
+));
 
 const manifestUrl = computed(() => {
     const base = baseUrl.value;
@@ -476,7 +487,8 @@ watch(
         <link v-if="manifestUrl" rel="manifest" :href="manifestUrl" />
         <meta name="theme-color" :content="themeColor" />
         <meta name="mobile-web-app-capable" content="yes" />
-        <link v-if="faviconHref" rel="icon" :href="faviconHref" />
+        <link v-if="faviconHref" rel="icon" :href="faviconHref" type="image/png" />
+        <link v-if="faviconHref" rel="apple-touch-icon" :href="faviconHref" />
     </Head>
     <div
         class="min-h-screen transition-colors"
@@ -648,6 +660,16 @@ watch(
                             <p class="truncate text-sm font-medium text-zinc-900 dark:text-zinc-100">{{ user.name }}</p>
                             <p class="truncate text-xs text-zinc-500 dark:text-zinc-400">{{ user.email }}</p>
                         </div>
+                        <a
+                            v-if="showBackToPanel"
+                            :href="backToPanelHref"
+                            class="flex w-full items-center gap-2 px-4 py-2.5 text-left text-sm font-medium text-zinc-700 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                            role="menuitem"
+                            @click="accountMenuOpen = false"
+                        >
+                            <ArrowLeft class="h-4 w-4" />
+                            {{ backToPanelLabel }}
+                        </a>
                         <button
                             type="button"
                             class="flex w-full items-center gap-2 px-4 py-2.5 text-left text-sm font-medium text-zinc-700 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800"
@@ -747,6 +769,15 @@ watch(
                             </div>
                         </div>
                         <div class="flex flex-col gap-1">
+                            <a
+                                v-if="showBackToPanel"
+                                :href="backToPanelHref"
+                                class="flex w-full items-center gap-2 rounded-lg px-4 py-3 text-left text-sm font-medium text-zinc-300 hover:bg-zinc-800"
+                                @click="closeMobileMenu"
+                            >
+                                <ArrowLeft class="h-4 w-4" />
+                                {{ backToPanelLabel }}
+                            </a>
                             <button
                                 type="button"
                                 class="flex w-full items-center gap-2 rounded-lg px-4 py-3 text-left text-sm font-medium text-zinc-300 hover:bg-zinc-800"
