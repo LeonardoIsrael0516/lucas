@@ -45,8 +45,15 @@ if [ -n "${GETFY_REPO_URL:-}" ]; then
   $SUDO "${GIT_BASE[@]}" remote set-url origin "$GETFY_REPO_URL" >/dev/null 2>&1 || true
 fi
 
+# Stash pop anterior pode deixar "needs merge" e bloquear o próximo update.
+$SUDO "${GIT_BASE[@]}" merge --abort >/dev/null 2>&1 || true
+$SUDO "${GIT_BASE[@]}" rebase --abort >/dev/null 2>&1 || true
+
+UNMERGED="$($SUDO "${GIT_BASE[@]}" diff --name-only --diff-filter=U 2>/dev/null || true)"
 HAS_LOCAL_CHANGES=0
-if [ -n "$($SUDO "${GIT_BASE[@]}" status --porcelain 2>/dev/null || true)" ]; then
+if [ -n "$UNMERGED" ]; then
+  echo "Aviso: conflitos no Git (ex.: stash pop anterior). Serão descartados no reset para origin/$BRANCH." >&2
+elif [ -n "$($SUDO "${GIT_BASE[@]}" status --porcelain 2>/dev/null || true)" ]; then
   HAS_LOCAL_CHANGES=1
   # IMPORTANT:
   # Do not stash runtime/config files (they are untracked by design).
