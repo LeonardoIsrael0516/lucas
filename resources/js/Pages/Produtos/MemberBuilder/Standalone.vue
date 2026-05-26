@@ -1,4 +1,4 @@
-<script setup>
+﻿<script setup>
 import { ref, computed, reactive, nextTick, onMounted, watch } from 'vue';
 import axios from 'axios';
 import MemberBuilderPreview from '@/components/member-builder/MemberBuilderPreview.vue';
@@ -32,6 +32,8 @@ import {
     Presentation,
     Copy,
     Sparkles,
+    Download,
+    Link2,
 } from 'lucide-vue-next';
 import {
     communityPageIconComponents,
@@ -175,6 +177,7 @@ watch(
 
 const tabs = [
     { id: 'modulos', label: 'Módulos', icon: Layers, hasPreview: false },
+    { id: 'introducao', label: 'Introdução', icon: BookOpen, hasPreview: false },
     { id: 'turmas', label: 'Turmas', icon: Users, hasPreview: false },
     { id: 'recomendados', label: 'Cursos recomendados', icon: Sparkles, hasPreview: false },
     { id: 'progresso', label: 'Progresso', icon: BarChart3, hasPreview: false },
@@ -234,6 +237,11 @@ onMounted(() => {
     const moduleIdParam = p.get('moduleId');
     if (moduleIdParam && findModuleById(moduleIdParam)) {
         modulosSelectedModuleId.value = /^\d+$/.test(moduleIdParam) ? Number(moduleIdParam) : moduleIdParam;
+    }
+    const introLessonIdParam = p.get('introLessonId');
+    if (introLessonIdParam && activeTab.value === 'introducao') {
+        const entry = pdfLessonsForIntro.value.find((e) => String(e.lesson.id) === String(introLessonIdParam));
+        if (entry) openIntroEditor(entry);
     }
 });
 watch(activeTab, (id) => {
@@ -524,6 +532,162 @@ function isLessonPdfContentType(type) {
     return type === 'pdf' || type === 'pdf_presentation' || type === 'pdf_reader';
 }
 
+/** Aba Introdução: uma página antes do PDF por aula. */
+const introSelectedLessonId = ref(null);
+const introEditorForm = ref(null);
+const introEditorTab = ref('overview');
+const introEditorSaving = ref(false);
+
+const pdfLessonsForIntro = computed(() => {
+    const out = [];
+    for (const mod of props.produto.modules ?? []) {
+        if (mod.related_product_id || mod.external_url) continue;
+        for (const lesson of mod.lessons ?? []) {
+            if (!isLessonPdfContentType(lesson.type)) continue;
+            const files = Array.isArray(lesson.content_files) ? lesson.content_files.length : 0;
+            const hasUrl = !!(lesson.content_url && String(lesson.content_url).trim());
+            const linkCount = Array.isArray(lesson.resource_links) ? lesson.resource_links.length : 0;
+            const hasOverview = !!(lesson.content_text && String(lesson.content_text).trim());
+            out.push({
+                lesson,
+                moduleId: mod.id,
+                moduleTitle: mod.title ?? 'Módulo',
+                fileCount: files || (hasUrl ? 1 : 0),
+                hasOverview,
+                linkCount,
+                isConfigured: hasOverview || linkCount > 0 || files > 0 || hasUrl,
+            });
+        }
+    }
+    return out;
+});
+
+const introSelectedEntry = computed(() =>
+    pdfLessonsForIntro.value.find((e) => e.lesson.id == introSelectedLessonId.value) ?? null
+);
+
+function introLessonTypeLabel(type) {
+    if (type === 'pdf_presentation') return 'Apresentação';
+    if (type === 'pdf_reader') return 'Leitor PDF';
+    return 'Material';
+}
+
+function openIntroEditor(entry) {
+    if (!entry?.lesson) return;
+    introEditorTab.value = 'overview';
+    introSelectedLessonId.value = entry.lesson.id;
+    const lesson = entry.lesson;
+    introEditorForm.value = {
+        lessonId: lesson.id,
+        moduleId: entry.moduleId,
+        moduleTitle: entry.moduleTitle,
+        lessonTitle: lesson.title ?? 'Sem título',
+        lessonType: lesson.type,
+        content_text: lesson.content_text ?? '',
+        resource_links: Array.isArray(lesson.resource_links)
+            ? lesson.resource_links.map((l) => ({
+                  title: (l?.title ?? '').toString(),
+                  url: (l?.url ?? '').toString(),
+              }))
+            : [],
+        fileCount: entry.fileCount,
+    };
+    const url = new URL(window.location.href);
+    url.searchParams.set('introLessonId', String(lesson.id));
+    window.history.replaceState({}, '', url.toString());
+}
+
+function addIntroResourceLink() {
+    if (!introEditorForm.value) return;
+    if (!Array.isArray(introEditorForm.value.resource_links)) introEditorForm.value.resource_links = [];
+    if (introEditorForm.value.resource_links.length >= 20) return;
+    introEditorForm.value.resource_links.push({ title: '', url: '' });
+}
+
+function removeIntroResourceLinkAt(index) {
+    introEditorForm.value?.resource_links?.splice(index, 1);
+}
+
+function goToModulosForIntroFiles() {
+    const form = introEditorForm.value;
+    if (!form?.moduleId) return;
+    activeTab.value = 'modulos';
+    modulosSelectedModuleId.value = form.moduleId;
+    closeModulosLessonForm();
+    const lesson = findModuleById(form.moduleId)?.lessons?.find((l) => l.id == form.lessonId);
+    if (lesson) {
+        nextTick(() => openModulosLessonForm(lesson));
+    }
+}
+
+async function saveIntroEditor() {
+    const form = introEditorForm.value;
+    if (!form?.lessonId) return;
+    introEditorSaving.value = true;
+    try {
+        const resource_links = (Array.isArray(form.resource_links) ? form.resource_links : [])
+            .map((l) => ({
+                title: (l?.title ?? '').toString().trim(),
+                url: (l?.url ?? '').toString().trim(),
+            }))
+            .filter((l) => l.title && l.url);
+        const { data } = await axios.put(
+            `${base.value}/lessons/${form.lessonId}`,
+            {
+                content_text: form.content_text ?? '',
+                resource_links,
+            },
+            { headers: headers() }
+        );
+        const lesson = data?.lesson;
+        if (lesson?.id) {
+            const mod = findModuleById(form.moduleId);
+            mergeLessonIntoModule(mod, lesson);
+            introEditorForm.value = {
+                ...form,
+                content_text: lesson.content_text ?? form.content_text,
+                resource_links: Array.isArray(lesson.resource_links)
+                    ? lesson.resource_links.map((l) => ({
+                          title: (l?.title ?? '').toString(),
+                          url: (l?.url ?? '').toString(),
+                      }))
+                    : form.resource_links,
+            };
+        }
+    } catch (e) {
+        const msg = e.response?.data?.message ?? e.message ?? 'Erro ao salvar introdução.';
+        alert(msg);
+    } finally {
+        introEditorSaving.value = false;
+    }
+}
+
+watch(activeTab, (id) => {
+    if (id === 'introducao') {
+        const hasIntroLessonInUrl =
+            typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('introLessonId');
+        if (
+            !hasIntroLessonInUrl &&
+            pdfLessonsForIntro.value.length > 0 &&
+            !introSelectedLessonId.value
+        ) {
+            openIntroEditor(pdfLessonsForIntro.value[0]);
+        }
+    } else {
+        introEditorForm.value = null;
+        introSelectedLessonId.value = null;
+    }
+});
+
+onMounted(() => {
+    if (activeTab.value !== 'introducao') return;
+    const p = new URLSearchParams(window.location.search);
+    if (p.get('introLessonId')) return;
+    if (pdfLessonsForIntro.value.length > 0 && !introSelectedLessonId.value) {
+        openIntroEditor(pdfLessonsForIntro.value[0]);
+    }
+});
+
 function pdfLessonFileLabel(type) {
     if (type === 'pdf_presentation') return 'Apresentação';
     if (type === 'pdf_reader') return 'Documento';
@@ -673,7 +837,9 @@ function lessonPayload(form) {
         content_files: isLessonPdfContentType(form.type) ? contentFiles : [],
         release_after_days,
         release_at_date,
-        content_text: form.content_text ?? '',
+        ...(isLessonPdfContentType(form.type)
+            ? {}
+            : { content_text: form.content_text ?? '' }),
         duration_seconds: 0,
         is_free: false,
         watermark_enabled: !!form.watermark_enabled,
@@ -2356,22 +2522,32 @@ const inputClass = 'block w-full rounded-lg border border-zinc-300 bg-white px-3
                                                 <label class="mb-1 block text-xs font-medium text-zinc-600 dark:text-zinc-400">Título do link</label>
                                                 <input v-model="modulosLessonForm.link_title" type="text" :class="inputClass" class="w-full" placeholder="Ex: Abrir material complementar" />
                                             </div>
-                                            <div v-if="modulosLessonForm.type === 'video' || modulosLessonForm.type === 'link' || modulosLessonForm.type === 'pdf' || modulosLessonForm.type === 'pdf_presentation' || modulosLessonForm.type === 'pdf_reader'">
+                                            <div
+                                                v-if="
+                                                    modulosLessonForm.type === 'video' ||
+                                                    modulosLessonForm.type === 'link' ||
+                                                    isLessonPdfContentType(modulosLessonForm.type)
+                                                "
+                                            >
                                                 <label class="mb-1 block text-xs font-medium text-zinc-600 dark:text-zinc-400">URL do conteúdo</label>
                                                 <input v-model="modulosLessonForm.content_url" type="url" :class="inputClass" class="w-full" placeholder="https://..." />
                                                 <p v-if="modulosLessonForm.type === 'video'" class="mt-1.5 text-xs text-zinc-500 dark:text-zinc-400">
                                                     Aceita links do YouTube, Vimeo, Wistia, Loom e outras plataformas de vídeo compatíveis.
                                                 </p>
                                             </div>
-                                            <div v-if="modulosLessonForm.type === 'pdf' || modulosLessonForm.type === 'pdf_presentation' || modulosLessonForm.type === 'pdf_reader'" class="space-y-2">
+                                            <div v-if="modulosLessonForm.type === 'text'">
+                                                <label class="mb-1 block text-xs font-medium text-zinc-600 dark:text-zinc-400">Texto</label>
+                                                <textarea v-model="modulosLessonForm.content_text" :class="inputClass" class="w-full" rows="3" placeholder="Conteúdo da aula..." />
+                                            </div>
+                                            <div v-if="isLessonPdfContentType(modulosLessonForm.type)" class="space-y-2">
                                                 <input ref="lessonPdfFileInput" type="file" accept=".pdf,application/pdf" multiple class="hidden" @change="onLessonPdfChange" />
                                                 <label class="block text-xs font-medium text-zinc-600 dark:text-zinc-400">
                                                     {{
                                                         modulosLessonForm.type === 'pdf_presentation'
-                                                            ? 'Enviar arquivo (apresentação)'
+                                                            ? 'Arquivos da apresentação'
                                                             : modulosLessonForm.type === 'pdf_reader'
-                                                              ? 'Enviar arquivo (leitor de PDF)'
-                                                              : 'Enviar arquivo (material)'
+                                                              ? 'Arquivos do leitor'
+                                                              : 'Materiais PDF'
                                                     }}
                                                 </label>
                                                 <div class="flex flex-wrap items-center gap-2">
@@ -2379,11 +2555,13 @@ const inputClass = 'block w-full rounded-lg border border-zinc-300 bg-white px-3
                                                         {{
                                                             lessonPdfUploading
                                                                 ? 'Enviando…'
-                                                                : modulosLessonForm.type === 'pdf' ? 'Selecionar materiais' : 'Selecionar PDFs'
+                                                                : modulosLessonForm.type === 'pdf'
+                                                                  ? 'Selecionar materiais'
+                                                                  : 'Selecionar PDFs'
                                                         }}
                                                     </Button>
                                                     <span v-if="(modulosLessonForm.content_files?.length ?? 0) > 0" class="text-xs text-zinc-500 dark:text-zinc-400">
-                                                        {{ modulosLessonForm.content_files.length }} arquivo(s) anexado(s)
+                                                        {{ modulosLessonForm.content_files.length }} arquivo(s)
                                                     </span>
                                                     <button v-if="(modulosLessonForm.content_files?.length ?? 0) > 0" type="button" class="text-xs text-red-600 hover:underline" @click="clearLessonPdf">Remover todos</button>
                                                 </div>
@@ -2397,15 +2575,27 @@ const inputClass = 'block w-full rounded-lg border border-zinc-300 bg-white px-3
                                                         <button type="button" class="shrink-0 text-red-600 hover:underline" @click="removeLessonPdfAt(i)">Remover</button>
                                                     </div>
                                                 </div>
-                                                <p class="text-xs text-zinc-500 dark:text-zinc-400">Ou use a URL acima se o material estiver hospedado em outro site. Máx. {{ uploadLimits.pdf_max_mb }} MB.</p>
+                                                <p class="text-xs text-zinc-500 dark:text-zinc-400">
+                                                    Máx. {{ uploadLimits.pdf_max_mb }} MB por arquivo.
+                                                    A página antes do PDF (visão geral, links) é configurada na aba
+                                                    <button type="button" class="font-semibold text-sky-700 underline dark:text-sky-300" @click="activeTab = 'introducao'">
+                                                        Introdução
+                                                    </button>.
+                                                </p>
                                             </div>
-                                            <div v-if="modulosLessonForm.type === 'text'">
-                                                <label class="mb-1 block text-xs font-medium text-zinc-600 dark:text-zinc-400">Texto</label>
-                                                <textarea v-model="modulosLessonForm.content_text" :class="inputClass" class="w-full" rows="3" placeholder="Conteúdo da aula..." />
-                                            </div>
-                                            <div v-if="modulosLessonForm.type === 'video' || modulosLessonForm.type === 'link' || modulosLessonForm.type === 'pdf' || modulosLessonForm.type === 'pdf_presentation' || modulosLessonForm.type === 'pdf_reader'">
+                                            <div
+                                                v-else-if="
+                                                    modulosLessonForm.type === 'video' || modulosLessonForm.type === 'link'
+                                                "
+                                            >
                                                 <label class="mb-1 block text-xs font-medium text-zinc-600 dark:text-zinc-400">Descrição</label>
-                                                <textarea v-model="modulosLessonForm.content_text" :class="inputClass" class="w-full" rows="3" placeholder="Texto ou links para complementar a aula (opcional)..." />
+                                                <textarea
+                                                    v-model="modulosLessonForm.content_text"
+                                                    :class="inputClass"
+                                                    class="w-full"
+                                                    rows="3"
+                                                    placeholder="Texto ou links para complementar a aula (opcional)..."
+                                                />
                                             </div>
                                             <div v-if="modulosLessonForm.type === 'video'" class="rounded-lg border border-zinc-200 bg-white p-3 dark:border-zinc-700 dark:bg-zinc-800/50">
                                                 <div class="flex items-center">
@@ -2495,6 +2685,232 @@ const inputClass = 'block w-full rounded-lg border border-zinc-300 bg-white px-3
                                         <Plus class="mr-2 h-4 w-4" />
                                         Nova turma
                                     </Button>
+                                </div>
+                            </div>
+                        </div>
+                    </template>
+
+                    <template v-else-if="activeTab === 'introducao'">
+                        <div class="flex min-h-[28rem] flex-col gap-4 lg:flex-row lg:gap-6">
+                            <div class="flex min-h-0 w-full shrink-0 flex-col lg:w-72 xl:w-80">
+                                <div class="mb-3">
+                                    <h2 class="text-sm font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+                                        Introdução das aulas
+                                    </h2>
+                                    <p class="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+                                        Uma página antes do PDF por aula (Material, Apresentação ou Leitor). Escolha a aula para personalizar.
+                                    </p>
+                                </div>
+                                <div
+                                    v-if="!pdfLessonsForIntro.length"
+                                    class="rounded-xl border border-dashed border-zinc-300 px-4 py-8 text-center text-sm text-zinc-500 dark:border-zinc-600 dark:text-zinc-400"
+                                >
+                                    Nenhuma aula em PDF neste produto. Crie aulas do tipo Material, Apresentação ou Leitor de PDF na aba Módulos.
+                                </div>
+                                <ul v-else class="min-h-0 flex-1 space-y-1 overflow-y-auto rounded-xl border border-zinc-200 bg-zinc-50/50 p-2 dark:border-zinc-700 dark:bg-zinc-800/30">
+                                    <li v-for="entry in pdfLessonsForIntro" :key="entry.lesson.id">
+                                        <button
+                                            type="button"
+                                            class="flex w-full flex-col items-start gap-0.5 rounded-lg px-3 py-2.5 text-left text-sm transition"
+                                            :class="
+                                                introSelectedLessonId == entry.lesson.id
+                                                    ? 'bg-sky-600 text-white shadow-sm dark:bg-sky-500'
+                                                    : 'text-zinc-700 hover:bg-white dark:text-zinc-200 dark:hover:bg-zinc-700/60'
+                                            "
+                                            @click="openIntroEditor(entry)"
+                                        >
+                                            <span class="line-clamp-2 font-semibold">{{ entry.lesson.title || 'Sem título' }}</span>
+                                            <span
+                                                class="text-[11px]"
+                                                :class="
+                                                    introSelectedLessonId == entry.lesson.id
+                                                        ? 'text-sky-100'
+                                                        : 'text-zinc-500 dark:text-zinc-400'
+                                                "
+                                            >
+                                                {{ entry.moduleTitle }} · {{ introLessonTypeLabel(entry.lesson.type) }}
+                                            </span>
+                                            <span
+                                                v-if="entry.isConfigured"
+                                                class="mt-0.5 rounded px-1.5 py-0.5 text-[10px] font-medium"
+                                                :class="
+                                                    introSelectedLessonId == entry.lesson.id
+                                                        ? 'bg-sky-500/80 text-white'
+                                                        : 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-200'
+                                                "
+                                            >
+                                                Configurada
+                                            </span>
+                                        </button>
+                                    </li>
+                                </ul>
+                            </div>
+
+                            <div class="min-h-0 min-w-0 flex-1 rounded-xl border border-zinc-200 bg-white dark:border-zinc-700 dark:bg-zinc-900/40">
+                                <div v-if="!introEditorForm" class="flex h-full min-h-[20rem] flex-col items-center justify-center p-8 text-center">
+                                    <BookOpen class="h-12 w-12 text-zinc-300 dark:text-zinc-600" />
+                                    <p class="mt-3 text-sm font-medium text-zinc-600 dark:text-zinc-300">Selecione uma aula à esquerda</p>
+                                    <p class="mt-1 max-w-sm text-xs text-zinc-500 dark:text-zinc-400">
+                                        Você define visão geral, links e comentários (se ativos) para a tela que o aluno vê antes de abrir o PDF.
+                                    </p>
+                                </div>
+                                <div v-else class="flex h-full min-h-0 flex-col">
+                                    <div class="shrink-0 border-b border-zinc-200 px-4 py-3 dark:border-zinc-700">
+                                        <p class="text-[11px] font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+                                            {{ introEditorForm.moduleTitle }}
+                                        </p>
+                                        <h3 class="text-base font-bold text-zinc-900 dark:text-zinc-100">
+                                            {{ introEditorForm.lessonTitle }}
+                                        </h3>
+                                        <p class="mt-0.5 text-xs text-zinc-500 dark:text-zinc-400">
+                                            {{ introLessonTypeLabel(introEditorForm.lessonType) }}
+                                        </p>
+                                    </div>
+                                    <nav class="flex shrink-0 gap-0.5 overflow-x-auto border-b border-zinc-200 px-2 dark:border-zinc-700">
+                                        <button
+                                            type="button"
+                                            class="flex shrink-0 items-center gap-1 border-b-2 px-3 py-2.5 text-xs font-semibold transition"
+                                            :class="
+                                                introEditorTab === 'overview'
+                                                    ? 'border-sky-600 text-sky-800 dark:border-sky-400 dark:text-sky-200'
+                                                    : 'border-transparent text-zinc-500 hover:text-zinc-700'
+                                            "
+                                            @click="introEditorTab = 'overview'"
+                                        >
+                                            Visão geral
+                                        </button>
+                                        <button
+                                            type="button"
+                                            class="flex shrink-0 items-center gap-1 border-b-2 px-3 py-2.5 text-xs font-semibold transition"
+                                            :class="
+                                                introEditorTab === 'download'
+                                                    ? 'border-sky-600 text-sky-800 dark:border-sky-400 dark:text-sky-200'
+                                                    : 'border-transparent text-zinc-500 hover:text-zinc-700'
+                                            "
+                                            @click="introEditorTab = 'download'"
+                                        >
+                                            <Download class="h-3.5 w-3.5" />
+                                            Baixar PDF
+                                        </button>
+                                        <button
+                                            type="button"
+                                            class="flex shrink-0 items-center gap-1 border-b-2 px-3 py-2.5 text-xs font-semibold transition"
+                                            :class="
+                                                introEditorTab === 'links'
+                                                    ? 'border-sky-600 text-sky-800 dark:border-sky-400 dark:text-sky-200'
+                                                    : 'border-transparent text-zinc-500 hover:text-zinc-700'
+                                            "
+                                            @click="introEditorTab = 'links'"
+                                        >
+                                            <Link2 class="h-3.5 w-3.5" />
+                                            Links
+                                        </button>
+                                        <button
+                                            type="button"
+                                            class="flex shrink-0 items-center gap-1 border-b-2 px-3 py-2.5 text-xs font-semibold transition"
+                                            :class="
+                                                introEditorTab === 'comments'
+                                                    ? 'border-sky-600 text-sky-800 dark:border-sky-400 dark:text-sky-200'
+                                                    : 'border-transparent text-zinc-500 hover:text-zinc-700'
+                                            "
+                                            @click="introEditorTab = 'comments'"
+                                        >
+                                            <MessageSquare class="h-3.5 w-3.5" />
+                                            Comentar
+                                        </button>
+                                    </nav>
+                                    <div class="min-h-0 flex-1 overflow-y-auto p-4">
+                                        <div v-show="introEditorTab === 'overview'" class="space-y-2">
+                                            <label class="block text-xs font-medium text-zinc-600 dark:text-zinc-400">Texto da visão geral</label>
+                                            <textarea
+                                                v-model="introEditorForm.content_text"
+                                                :class="inputClass"
+                                                class="w-full"
+                                                rows="10"
+                                                placeholder="Resumo da aula: o que o aluno vai aprender, artigos de lei, dicas..."
+                                            />
+                                            <p class="text-xs text-zinc-500 dark:text-zinc-400">
+                                                O aluno lê isso na primeira tela, antes de abrir o leitor ou a apresentação.
+                                            </p>
+                                        </div>
+                                        <div v-show="introEditorTab === 'download'" class="space-y-3">
+                                            <p class="text-sm text-zinc-600 dark:text-zinc-400">
+                                                Os arquivos PDF desta aula são enviados na aba <strong>Módulos</strong> (edição da aula).
+                                            </p>
+                                            <p class="text-xs text-zinc-500 dark:text-zinc-400">
+                                                Esta aula tem
+                                                <strong>{{ introEditorForm.fileCount || 0 }}</strong>
+                                                arquivo(s) PDF configurado(s). O aluno vê a lista na aba &quot;Baixar PDF&quot; da introdução.
+                                            </p>
+                                            <Button type="button" size="sm" variant="outline" @click="goToModulosForIntroFiles">
+                                                Editar PDFs na aba Módulos
+                                            </Button>
+                                        </div>
+                                        <div v-show="introEditorTab === 'links'" class="space-y-2">
+                                            <div class="flex items-center justify-between gap-2">
+                                                <label class="text-xs font-medium text-zinc-600 dark:text-zinc-400">Links úteis</label>
+                                                <Button
+                                                    type="button"
+                                                    size="sm"
+                                                    variant="outline"
+                                                    :disabled="(introEditorForm.resource_links?.length ?? 0) >= 20"
+                                                    @click="addIntroResourceLink"
+                                                >
+                                                    <Plus class="mr-1 h-3.5 w-3.5" />
+                                                    Adicionar
+                                                </Button>
+                                            </div>
+                                            <div
+                                                v-if="!(introEditorForm.resource_links?.length)"
+                                                class="rounded-md border border-dashed border-zinc-300 px-3 py-4 text-center text-xs text-zinc-500 dark:border-zinc-600"
+                                            >
+                                                Nenhum link. Ex.: Planalto, YouTube, jurisprudência.
+                                            </div>
+                                            <div
+                                                v-for="(link, linkIdx) in introEditorForm.resource_links"
+                                                :key="linkIdx"
+                                                class="flex flex-col gap-2 rounded-lg border border-zinc-200 bg-zinc-50 p-3 dark:border-zinc-700 dark:bg-zinc-800/50"
+                                            >
+                                                <input v-model="link.title" type="text" :class="inputClass" placeholder="Título do link" />
+                                                <div class="flex gap-2">
+                                                    <input v-model="link.url" type="url" :class="inputClass" class="min-w-0 flex-1" placeholder="https://..." />
+                                                    <button
+                                                        type="button"
+                                                        class="shrink-0 rounded-md p-2 text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30"
+                                                        @click="removeIntroResourceLinkAt(linkIdx)"
+                                                    >
+                                                        <Trash2 class="h-4 w-4" />
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <div v-show="introEditorTab === 'comments'" class="space-y-2">
+                                            <p class="text-xs text-zinc-600 dark:text-zinc-400">
+                                                Se ativados no produto, o aluno comenta nesta aula na aba Comentar da introdução.
+                                            </p>
+                                            <div
+                                                class="rounded-lg border px-3 py-2 text-xs"
+                                                :class="
+                                                    configForm.member_area_config.comments_enabled
+                                                        ? 'border-emerald-200 bg-emerald-50 text-emerald-900 dark:border-emerald-900/40 dark:bg-emerald-950/30'
+                                                        : 'border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-900/40 dark:bg-amber-950/30'
+                                                "
+                                            >
+                                                <template v-if="configForm.member_area_config.comments_enabled">
+                                                    Comentários <strong>ativados</strong> para este produto.
+                                                </template>
+                                                <template v-else>
+                                                    Comentários <strong>desativados</strong>.
+                                                    <button type="button" class="font-semibold underline" @click="activeTab = 'comentarios'">Ativar na aba Comentários</button>
+                                                </template>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="shrink-0 border-t border-zinc-200 p-4 dark:border-zinc-700">
+                                        <Button class="w-full sm:w-auto" :disabled="introEditorSaving" @click="saveIntroEditor">
+                                            {{ introEditorSaving ? 'Salvando…' : 'Salvar introdução desta aula' }}
+                                        </Button>
+                                    </div>
                                 </div>
                             </div>
                         </div>

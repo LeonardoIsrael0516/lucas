@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Http\Controllers\Concerns\SharesStudentSupportProps;
 use App\Models\MemberCertificateIssued;
 use App\Models\MemberComment;
 use App\Models\MemberCommunityPage;
@@ -24,18 +25,23 @@ use App\Services\MemberAreaResolver;
 use App\Services\MemberCommentService;
 use App\Services\MemberProgressService;
 use App\Services\StorageService;
+use App\Support\StudentAreaBranding;
+use App\Support\StudentAreaSettings;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Schema;
 use Inertia\Inertia;
 use Inertia\Response;
 use Symfony\Component\HttpFoundation\Response as SymfonyResponse;
 
 class MemberAreaAppController extends Controller
 {
+    use SharesStudentSupportProps;
+
     public function __construct(
         protected MemberProgressService $progressService,
         protected MemberAreaResolver $resolver,
@@ -232,6 +238,7 @@ class MemberAreaAppController extends Controller
             'base_url' => $this->baseUrlForRequest($product, $request),
             'slug' => $slug,
             ...$this->pushProps($product),
+            ...$this->studentHubProps($request, $product),
         ] + $this->gamificationProps($product, $user));
     }
 
@@ -314,6 +321,7 @@ class MemberAreaAppController extends Controller
                 'content_files' => $currentLesson->content_files,
                 'link_title' => $currentLesson->link_title,
                 'content_text' => \App\Support\HtmlSanitizer::sanitize($currentLesson->content_text),
+                'resource_links' => $this->sanitizeLessonResourceLinksForResponse($currentLesson->resource_links),
                 'duration_seconds' => $currentLesson->duration_seconds,
                 'is_completed' => $this->isLessonCompleted($user->id, $currentLesson->id),
                 'module' => ['id' => $module->id, 'title' => $module->title],
@@ -413,6 +421,7 @@ class MemberAreaAppController extends Controller
             'comments_require_approval' => $commentsRequireApproval,
             'lesson_comments' => $lessonComments,
             ...$this->pushProps($product),
+            ...$this->studentHubProps($request, $product),
         ]);
     }
 
@@ -751,6 +760,7 @@ class MemberAreaAppController extends Controller
             'base_url' => $this->baseUrlForRequest($product, $request),
             'slug' => $slug,
             ...$this->pushProps($product),
+            ...$this->studentHubProps($request, $product),
         ] + $this->gamificationProps($product, $user));
     }
 
@@ -784,6 +794,7 @@ class MemberAreaAppController extends Controller
             'base_url' => $this->baseUrlForRequest($product, $request),
             'slug' => $slug,
             ...$this->pushProps($product),
+            ...$this->studentHubProps($request, $product),
         ] + $this->gamificationProps($product, $user));
     }
 
@@ -850,6 +861,7 @@ class MemberAreaAppController extends Controller
             'base_url' => $this->baseUrlForRequest($product, $request),
             'slug' => $slug,
             ...$this->pushProps($product),
+            ...$this->studentHubProps($request, $product),
         ] + $this->gamificationProps($product, $user));
     }
 
@@ -1030,6 +1042,7 @@ class MemberAreaAppController extends Controller
             'slug' => $slug,
             'newly_unlocked_achievements' => $newlyUnlocked,
             ...$this->pushProps($product),
+            ...$this->studentHubProps($request, $product),
         ] + $this->gamificationProps($product, $user));
     }
 
@@ -1104,6 +1117,68 @@ class MemberAreaAppController extends Controller
             'push_enabled' => $pushEnabled,
             'vapid_public' => $pushEnabled ? ($pwa['vapid_public'] ?? null) : null,
         ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function studentHubProps(Request $request, Product $product): array
+    {
+        $user = $request->user();
+        if (! $user) {
+            return [];
+        }
+
+        $tenantId = $user->tenant_id
+            ? (int) $user->tenant_id
+            : ($product->tenant_id ? (int) $product->tenant_id : null);
+
+        $hubNav = [
+            'community_enabled' => StudentAreaSettings::communityEnabled($tenantId),
+            'certificate_enabled' => StudentAreaSettings::certificateEnabled($tenantId),
+            'gamification_enabled' => StudentAreaSettings::gamificationEnabled($tenantId),
+        ];
+
+        return array_merge([
+            'auth_user' => [
+                'name' => $user->name,
+                'email' => $user->email,
+                'initials' => $this->studentHubInitials($user->name ?? ''),
+            ],
+            'notifications_unread_count' => $this->safeUnreadNotificationsCount($user),
+            'hub_nav' => $hubNav,
+            'profile_href' => route('profile.index'),
+            'student_branding' => StudentAreaBranding::forUser($user),
+        ], $this->studentSupportPayload($tenantId));
+    }
+
+    private function studentHubInitials(string $name): string
+    {
+        $parts = preg_split('/\s+/', trim($name)) ?: [];
+        if (count($parts) >= 2) {
+            return mb_strtoupper(mb_substr($parts[0], 0, 1).mb_substr($parts[count($parts) - 1], 0, 1));
+        }
+        if ($parts !== []) {
+            return mb_strtoupper(mb_substr($parts[0], 0, 2));
+        }
+
+        return '?';
+    }
+
+    private function safeUnreadNotificationsCount($user): int
+    {
+        try {
+            if (! Schema::hasTable('notifications')) {
+                return 0;
+            }
+            if (! method_exists($user, 'unreadNotifications')) {
+                return 0;
+            }
+
+            return (int) $user->unreadNotifications()->count();
+        } catch (\Throwable) {
+            return 0;
+        }
     }
 
     /** @return array{gamification_achievements: array} */
@@ -1719,6 +1794,38 @@ class MemberAreaAppController extends Controller
         if (($lessonLock['is_locked'] ?? false) === true) {
             abort(403, $lessonLock['lock_message'] ?? 'Aula ainda não liberada.');
         }
+    }
+
+    /**
+     * @return list<array{title: string, url: string}>
+     */
+    private function sanitizeLessonResourceLinksForResponse(mixed $links): array
+    {
+        if (! is_array($links)) {
+            return [];
+        }
+
+        $out = [];
+        foreach ($links as $item) {
+            if (! is_array($item)) {
+                continue;
+            }
+            $title = trim((string) ($item['title'] ?? ''));
+            $url = trim((string) ($item['url'] ?? ''));
+            if ($title === '' || $url === '' || ! filter_var($url, FILTER_VALIDATE_URL)) {
+                continue;
+            }
+            $scheme = strtolower((string) parse_url($url, PHP_URL_SCHEME));
+            if (! in_array($scheme, ['http', 'https'], true)) {
+                continue;
+            }
+            $out[] = [
+                'title' => mb_substr($title, 0, 120),
+                'url' => mb_substr($url, 0, 2000),
+            ];
+        }
+
+        return array_slice($out, 0, 20);
     }
 
     /**

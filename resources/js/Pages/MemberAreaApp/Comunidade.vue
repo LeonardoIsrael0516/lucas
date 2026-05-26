@@ -17,11 +17,10 @@ const basePath = `/m/${props.slug}/comunidade`;
 </script>
 
 <template>
-    <div class="flex flex-col gap-6 lg:flex-row lg:gap-8">
-        <!-- Sidebar: lista de páginas -->
-        <aside class="w-full shrink-0 rounded-2xl border border-zinc-700 bg-zinc-800/50 shadow-lg lg:w-72">
-            <div class="border-b border-zinc-700 p-4">
-                <h2 class="flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-zinc-400">
+    <div class="flex flex-1 flex-col gap-6 overflow-y-auto p-4 sm:p-6 lg:flex-row lg:gap-8 lg:p-8">
+        <aside class="w-full shrink-0 rounded-xl border border-[var(--lesson-border)] bg-[var(--lesson-surface)] shadow-sm lg:w-72">
+            <div class="border-b border-[var(--lesson-border)] p-4">
+                <h2 class="flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-[var(--lesson-text-3)]">
                     <MessageSquare class="h-4 w-4" />
                     Páginas
                 </h2>
@@ -31,7 +30,7 @@ const basePath = `/m/${props.slug}/comunidade`;
                     v-for="p in pages"
                     :key="p.id"
                     :href="`${basePath}/${p.slug}`"
-                    class="flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium text-zinc-300 transition hover:bg-zinc-700/50 hover:text-white"
+                    class="flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium text-[var(--lesson-text-2)] transition hover:bg-[var(--lesson-bg)] hover:text-[var(--lesson-text)]"
                 >
                     <template v-if="p.icon">
                         <component v-if="getCommunityPageIconComponent(p.icon)" :is="getCommunityPageIconComponent(p.icon)" class="h-5 w-5 shrink-0 text-[var(--ma-primary)]" />
@@ -49,15 +48,15 @@ const basePath = `/m/${props.slug}/comunidade`;
         <!-- Conteúdo principal -->
         <main class="min-w-0 flex-1 space-y-8">
             <div>
-                <h1 class="text-3xl font-bold text-white">Comunidade</h1>
-                <p class="mt-2 text-zinc-400">Escolha uma página ao lado ou acesse diretamente:</p>
+                <h1 class="text-2xl font-bold text-[var(--lesson-text)]">Comunidade</h1>
+                <p class="mt-2 text-[var(--lesson-text-2)]">Escolha uma página ao lado ou acesse diretamente:</p>
             </div>
             <div class="grid gap-4 sm:grid-cols-2">
                 <Link
                     v-for="p in pages"
                     :key="p.id"
                     :href="`${basePath}/${p.slug}`"
-                    class="group relative overflow-hidden rounded-2xl border border-zinc-700 bg-zinc-800/50 shadow-lg transition hover:border-[var(--ma-primary)]/40 hover:shadow-xl"
+                    class="group relative overflow-hidden rounded-xl border border-[var(--lesson-border)] bg-[var(--lesson-surface)] shadow-sm transition hover:border-[var(--student-primary)]/40 hover:shadow-md"
                 >
                     <div v-if="p.banner_url" class="aspect-[2/1] w-full bg-zinc-700">
                         <img :src="p.banner_url" :alt="p.title" class="h-full w-full object-cover transition group-hover:scale-[1.02]" />

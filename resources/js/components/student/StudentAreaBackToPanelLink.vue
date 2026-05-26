@@ -7,6 +7,8 @@ defineProps({
     collapsed: { type: Boolean, default: false },
     /** sidebar | header */
     variant: { type: String, default: 'sidebar' },
+    /** Sidebar escura (área do curso) */
+    darkSidebar: { type: Boolean, default: false },
 });
 
 const { showBackToPanel, backToPanelHref, backToPanelLabel } = useBackToPanelLink();
@@ -20,7 +22,9 @@ const { showBackToPanel, backToPanelHref, backToPanelLabel } = useBackToPanelLin
         :class="[
             variant === 'header'
                 ? 'gap-1.5 px-2.5 py-1.5 text-zinc-600 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800'
-                : 'px-3 py-2.5 text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800',
+                : darkSidebar
+                  ? 'px-2.5 py-2 text-white/55 hover:bg-white/[0.07] hover:text-white/90'
+                  : 'px-3 py-2.5 text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800',
             collapsed ? 'justify-center' : 'gap-3',
         ]"
         :title="backToPanelLabel"

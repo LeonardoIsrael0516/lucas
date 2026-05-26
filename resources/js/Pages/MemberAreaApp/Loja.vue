@@ -14,17 +14,17 @@ const props = defineProps({
 </script>
 
 <template>
-    <div class="space-y-8">
-        <h1 class="text-2xl font-bold">Loja</h1>
+    <div class="flex-1 space-y-8 overflow-y-auto p-4 sm:p-6 lg:p-8">
+        <h1 class="text-2xl font-bold text-[var(--lesson-text)]">Loja</h1>
         <div class="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
-            <div v-for="item in items" :key="item.id" class="rounded-xl border border-zinc-700 bg-zinc-800/50 overflow-hidden">
-                <div class="aspect-video bg-zinc-700 flex items-center justify-center">
+            <div v-for="item in items" :key="item.id" class="overflow-hidden rounded-xl border border-[var(--lesson-border)] bg-[var(--lesson-surface)] shadow-sm">
+                <div class="flex aspect-video items-center justify-center bg-[var(--lesson-bg2)]">
                     <img v-if="item.image_url" :src="item.image_url" :alt="item.name" class="h-full w-full object-cover" />
                     <svg v-else class="h-12 w-12 text-zinc-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14" /></svg>
                 </div>
                 <div class="p-4">
                     <h2 class="font-semibold">{{ item.name }}</h2>
-                    <p v-if="item.description" class="mt-1 text-sm text-zinc-400 line-clamp-2">{{ item.description }}</p>
+                    <p v-if="item.description" class="mt-1 line-clamp-2 text-sm text-[var(--lesson-text-2)]">{{ item.description }}</p>
                     <div class="mt-4">
                         <Link v-if="item.has_access" :href="`/m/${slug}`" class="text-sm text-[var(--ma-primary)] hover:underline">Acessar área</Link>
                         <a v-else :href="`/c/${item.checkout_slug}`" target="_blank" rel="noopener">

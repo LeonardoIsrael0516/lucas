@@ -70,6 +70,38 @@ class MemberBuilderController extends Controller
         return array_slice($out, 0, 30);
     }
 
+    /**
+     * @return list<array{title: string, url: string}>
+     */
+    private function normalizeLessonResourceLinks(mixed $input): array
+    {
+        if (! is_array($input)) {
+            return [];
+        }
+
+        $out = [];
+        foreach ($input as $item) {
+            if (! is_array($item)) {
+                continue;
+            }
+            $title = trim((string) ($item['title'] ?? ''));
+            $url = trim((string) ($item['url'] ?? ''));
+            if ($title === '' || $url === '' || ! filter_var($url, FILTER_VALIDATE_URL)) {
+                continue;
+            }
+            $scheme = strtolower((string) parse_url($url, PHP_URL_SCHEME));
+            if (! in_array($scheme, ['http', 'https'], true)) {
+                continue;
+            }
+            $out[] = [
+                'title' => mb_substr($title, 0, 120),
+                'url' => mb_substr($url, 0, 2000),
+            ];
+        }
+
+        return array_slice($out, 0, 20);
+    }
+
     private function storagePathFromValue(string $value): ?string
     {
         $v = trim($value);
@@ -719,6 +751,7 @@ class MemberBuilderController extends Controller
                 'type' => $l->type,
                 'content_url' => $l->content_url,
                 'content_text' => \App\Support\HtmlSanitizer::sanitize($l->content_text),
+                'resource_links' => $l->resource_links,
                 'duration_seconds' => $l->duration_seconds,
                 'is_free' => $l->is_free,
                 'watermark_enabled' => (bool) ($l->watermark_enabled ?? false),
@@ -842,6 +875,9 @@ class MemberBuilderController extends Controller
             'release_after_days' => ['nullable', 'integer', 'min:1', 'max:3650'],
             'release_at_date' => ['nullable', 'date_format:Y-m-d'],
             'content_text' => ['nullable', 'string'],
+            'resource_links' => ['nullable', 'array', 'max:20'],
+            'resource_links.*.title' => ['required', 'string', 'max:120'],
+            'resource_links.*.url' => ['required', 'url', 'max:2000'],
             'duration_seconds' => ['nullable', 'integer', 'min:0'],
             'is_free' => ['boolean'],
             'watermark_enabled' => ['boolean'],
@@ -855,6 +891,7 @@ class MemberBuilderController extends Controller
             $validated['release_at_date'] = null;
         }
         $contentFiles = $this->normalizeLessonContentFiles($request->input('content_files'));
+        $resourceLinks = $this->normalizeLessonResourceLinks($request->input('resource_links'));
         if (in_array($validated['type'] ?? null, [MemberLesson::TYPE_PDF, MemberLesson::TYPE_PDF_PRESENTATION, MemberLesson::TYPE_PDF_READER], true)
             && empty($validated['content_url']) && count($contentFiles) > 0) {
             $validated['content_url'] = $contentFiles[0]['url'];
@@ -874,6 +911,7 @@ class MemberBuilderController extends Controller
             'release_after_days' => $validated['release_after_days'] ?? null,
             'release_at_date' => $validated['release_at_date'] ?? null,
             'content_text' => $validated['content_text'] ?? null,
+            'resource_links' => $resourceLinks !== [] ? $resourceLinks : null,
             'duration_seconds' => $validated['duration_seconds'] ?? null,
             'is_free' => $request->boolean('is_free', false),
             'watermark_enabled' => $request->boolean('watermark_enabled', false),
@@ -905,6 +943,9 @@ class MemberBuilderController extends Controller
             'release_after_days' => ['nullable', 'integer', 'min:1', 'max:3650'],
             'release_at_date' => ['nullable', 'date_format:Y-m-d'],
             'content_text' => ['nullable', 'string'],
+            'resource_links' => ['nullable', 'array', 'max:20'],
+            'resource_links.*.title' => ['required', 'string', 'max:120'],
+            'resource_links.*.url' => ['required', 'url', 'max:2000'],
             'duration_seconds' => ['nullable', 'integer', 'min:0'],
             'is_free' => ['boolean'],
             'watermark_enabled' => ['boolean'],
@@ -914,6 +955,10 @@ class MemberBuilderController extends Controller
         }
         if (array_key_exists('watermark_enabled', $validated)) {
             $validated['watermark_enabled'] = $request->boolean('watermark_enabled');
+        }
+        if ($request->has('resource_links')) {
+            $resourceLinks = $this->normalizeLessonResourceLinks($request->input('resource_links'));
+            $validated['resource_links'] = $resourceLinks !== [] ? $resourceLinks : null;
         }
         if (array_key_exists('release_at_date', $validated) || array_key_exists('release_after_days', $validated)) {
             $date = $validated['release_at_date'] ?? null;
@@ -1038,6 +1083,7 @@ class MemberBuilderController extends Controller
                 'release_after_days' => $l->release_after_days,
                 'release_at_date' => $l->release_at_date,
                 'content_text' => $l->content_text,
+                'resource_links' => $l->resource_links,
                 'duration_seconds' => $l->duration_seconds,
                 'is_free' => $l->is_free,
                 'watermark_enabled' => (bool) ($l->watermark_enabled ?? false),
@@ -1057,6 +1103,7 @@ class MemberBuilderController extends Controller
             'release_after_days' => $l->release_after_days,
             'release_at_date' => $l->release_at_date?->format('Y-m-d'),
             'content_text' => \App\Support\HtmlSanitizer::sanitize($l->content_text),
+            'resource_links' => $l->resource_links,
             'duration_seconds' => $l->duration_seconds,
             'is_free' => $l->is_free,
             'watermark_enabled' => (bool) ($l->watermark_enabled ?? false),
@@ -1108,6 +1155,7 @@ class MemberBuilderController extends Controller
             'release_after_days' => $lesson->release_after_days,
             'release_at_date' => $lesson->release_at_date,
             'content_text' => $lesson->content_text,
+            'resource_links' => $lesson->resource_links,
             'duration_seconds' => $lesson->duration_seconds,
             'is_free' => $lesson->is_free,
             'watermark_enabled' => (bool) ($lesson->watermark_enabled ?? false),
@@ -1781,6 +1829,7 @@ class MemberBuilderController extends Controller
                 'release_after_days' => $l->release_after_days,
                 'release_at_date' => $l->release_at_date?->format('Y-m-d'),
                 'content_text' => \App\Support\HtmlSanitizer::sanitize($l->content_text),
+                'resource_links' => $l->resource_links,
                 'duration_seconds' => $l->duration_seconds,
                 'is_free' => $l->is_free,
                 'watermark_enabled' => (bool) ($l->watermark_enabled ?? false),
@@ -1816,6 +1865,7 @@ class MemberBuilderController extends Controller
             'release_after_days' => $lesson->release_after_days,
             'release_at_date' => $lesson->release_at_date?->format('Y-m-d'),
             'content_text' => \App\Support\HtmlSanitizer::sanitize($lesson->content_text),
+            'resource_links' => $lesson->resource_links,
             'duration_seconds' => $lesson->duration_seconds,
             'is_free' => $lesson->is_free,
             'watermark_enabled' => (bool) ($lesson->watermark_enabled ?? false),

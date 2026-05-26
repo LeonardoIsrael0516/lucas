@@ -29,6 +29,7 @@ class MemberLesson extends Model
         'release_after_days',
         'release_at_date',
         'content_text',
+        'resource_links',
         'duration_seconds',
         'is_free',
         'watermark_enabled',
@@ -43,6 +44,7 @@ class MemberLesson extends Model
             'watermark_enabled' => 'boolean',
             'likes_count' => 'integer',
             'content_files' => 'array',
+            'resource_links' => 'array',
             'release_after_days' => 'integer',
             'release_at_date' => 'date:Y-m-d',
         ];

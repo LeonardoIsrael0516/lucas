@@ -3,10 +3,11 @@ import { computed, ref, onMounted, watch, onUnmounted } from 'vue';
 import { Link, usePage, Head, router } from '@inertiajs/vue3';
 import PwaInstallPrompt from '@/components/member-area/PwaInstallPrompt.vue';
 import MemberAreaNotificationsPanel from '@/components/member-area/MemberAreaNotificationsPanel.vue';
+import StudentHubSidebar from '@/components/student/StudentHubSidebar.vue';
 import Button from '@/components/ui/Button.vue';
 import { useBackToPanelLink } from '@/composables/useBackToPanelLink';
 import { pickFaviconUrl } from '@/composables/resolveAssetUrl';
-import { Bell, ChevronDown, User, X, Camera, Lock, CheckCircle, AlertCircle, Menu, Trophy, ArrowLeft } from 'lucide-vue-next';
+import { Bell, ChevronDown, User, X, Camera, Lock, CheckCircle, AlertCircle, Menu, Trophy, ArrowLeft, LogOut } from 'lucide-vue-next';
 
 const page = usePage();
 const props = computed(() => page.props);
@@ -17,6 +18,16 @@ const slug = computed(() => props.value?.slug ?? '');
 const push_enabled = computed(() => props.value?.push_enabled ?? false);
 const vapid_public = computed(() => props.value?.vapid_public ?? null);
 const base_url = computed(() => props.value?.base_url ?? '');
+
+const student_branding = computed(() => props.value?.student_branding ?? { primary: '#0ea5e9' });
+const hub_nav = computed(() => props.value?.hub_nav ?? {});
+const profile_href = computed(() => props.value?.profile_href ?? '/meu-perfil');
+const suporte_href = computed(() => props.value?.suporte_href ?? null);
+const hub_auth_user = computed(() => props.value?.auth_user ?? null);
+const hub_notifications_unread = computed(() => props.value?.notifications_unread_count ?? 0);
+
+const hubSidebarCollapsed = ref(false);
+const hubMobileOpen = ref(false);
 
 const user = computed(() => props.value?.auth?.user ?? null);
 const { showBackToPanel, backToPanelHref, backToPanelLabel } = useBackToPanelLink();
@@ -491,297 +502,105 @@ watch(
         <link v-if="faviconHref" rel="apple-touch-icon" :href="faviconHref" />
     </Head>
     <div
-        class="min-h-screen transition-colors"
+        class="member-lesson-shell flex h-screen overflow-hidden bg-[var(--lesson-bg)] text-[var(--lesson-text)] print:h-auto print:overflow-visible"
         :style="{
-            '--ma-primary': theme.primary || '#0ea5e9',
-            '--ma-bg': theme.background || '#18181b',
+            '--ma-primary': theme.primary || student_branding?.primary || '#0ea5e9',
+            '--ma-bg': theme.background || '#eef2f8',
             '--ma-sidebar-bg': theme.sidebar_bg || '#27272a',
-            '--ma-text': theme.text || '#f8fafc',
+            '--ma-text': theme.text || '#0a1628',
+            '--student-primary': student_branding?.primary || theme.primary || '#0ea5e9',
         }"
     >
-        <!-- Header: logo/nav à esquerda, conta e notificações à direita; overflow-visible para dropdowns não serem cortados -->
-        <header
-            class="fixed left-0 right-0 top-0 z-30 flex h-14 items-center justify-between gap-4 overflow-visible px-4 transition-[background] duration-300 print:hidden md:px-6"
-            :class="[headerScrolled ? 'bg-black/30 backdrop-blur-md' : 'bg-transparent']"
-            :style="{ color: 'var(--ma-text)' }"
-        >
-            <div class="flex min-w-0 shrink items-center gap-4 md:gap-6">
-                <Link :href="basePath" class="flex shrink-0 items-center gap-4" @click="closeMobileMenu">
-                    <img
-                        v-if="headerLogo"
-                        :src="headerLogo"
-                        :alt="product?.name || 'Logo'"
-                        class="h-8 w-auto max-w-[180px] object-contain object-left"
-                    />
-                    <span v-else class="text-lg font-semibold text-white drop-shadow-md">
-                        {{ product?.name || 'Área de Membros' }}
-                    </span>
-                </Link>
-                <!-- Nav: escondido em mobile quando há hamburger; visível em desktop ou quando <= 2 itens -->
-                <nav
-                    class="hidden items-center gap-1 md:flex"
-                    :class="{ '!flex': showMobileHamburger === false }"
-                >
-                    <template v-for="item in sidebarItems" :key="item.title">
-                        <a
-                            v-if="item.open_external"
-                            :href="item.link"
-                            target="_blank"
-                            rel="noopener"
-                            class="rounded-lg px-3 py-2 text-sm font-medium text-white/90 drop-shadow hover:bg-white/10"
-                        >
-                            {{ item.title }}
-                        </a>
-                        <Link
-                            v-else
-                            :href="item.link.startsWith('/') ? basePath + item.link : basePath + '/' + item.link"
-                            class="rounded-lg px-3 py-2 text-sm font-medium text-white/90 drop-shadow hover:bg-white/10"
-                        >
-                            {{ item.title }}
-                        </Link>
-                    </template>
-                </nav>
-                <!-- Botão hamburger: só quando mais de 2 itens E em telas pequenas (md:hidden quando showMobileHamburger) -->
-                <button
-                    v-if="showMobileHamburger"
-                    type="button"
-                    class="flex h-10 w-10 items-center justify-center rounded-lg text-white/90 hover:bg-white/10 md:hidden"
-                    aria-label="Abrir menu"
-                    @click="mobileMenuOpen = true"
-                >
-                    <Menu class="h-6 w-6" />
-                </button>
-            </div>
-            <div class="flex shrink-0 items-center gap-2">
-                <!-- Gamificação: badge + dropdown -->
-                <div v-if="showGamificationBadge" ref="gamificationDropdownRef" class="relative">
-                    <button
-                        type="button"
-                        class="flex h-9 w-9 items-center justify-center rounded-lg text-white/90 drop-shadow transition hover:bg-white/10"
-                        aria-label="Conquistas"
-                        :aria-expanded="gamificationDropdownOpen"
-                        @click.stop="gamificationDropdownOpen = !gamificationDropdownOpen"
-                    >
-                        <img
-                            v-if="lastUnlockedAchievement?.image_url"
-                            :src="lastUnlockedAchievement.image_url"
-                            alt="Conquistas"
-                            class="h-8 w-8 rounded-full object-cover"
-                        />
-                        <Trophy v-else class="h-6 w-6" />
-                    </button>
-                    <div
-                        v-show="gamificationDropdownOpen"
-                        class="absolute right-0 z-50 mt-2 w-72 max-h-[80vh] overflow-y-auto rounded-xl border border-zinc-200 bg-white shadow-xl dark:border-zinc-700 dark:bg-zinc-900"
-                    >
-                        <div class="sticky top-0 border-b border-zinc-100 bg-white px-4 py-3 dark:border-zinc-700 dark:bg-zinc-900">
-                            <h3 class="text-sm font-semibold text-zinc-900 dark:text-zinc-100">Suas conquistas</h3>
-                        </div>
-                        <div class="p-2">
-                            <div
-                                v-for="ach in gamificationAchievements"
-                                :key="ach.id"
-                                class="flex items-center gap-3 rounded-lg p-2 transition"
-                                :class="ach.unlocked ? '' : 'opacity-50'"
-                            >
-                                <div class="h-12 w-12 shrink-0 overflow-hidden rounded-full" :class="ach.unlocked ? '' : 'grayscale'">
-                                    <img v-if="ach.image_url" :src="ach.image_url" :alt="ach.title" class="h-full w-full object-cover" />
-                                    <div v-else class="flex h-full w-full items-center justify-center bg-zinc-200 dark:bg-zinc-700">
-                                        <Trophy class="h-6 w-6 text-zinc-500" />
-                                    </div>
-                                </div>
-                                <div class="min-w-0 flex-1">
-                                    <p class="text-sm font-medium text-zinc-900 dark:text-zinc-100">{{ ach.title }}</p>
-                                    <p v-if="ach.unlocked" class="text-xs text-zinc-500 dark:text-zinc-400">{{ ach.description }}</p>
-                                    <p v-else-if="ach.requirement_text" class="text-xs text-amber-600 dark:text-amber-400">Para desbloquear: {{ ach.requirement_text }}</p>
-                                </div>
-                                <CheckCircle v-if="ach.unlocked" class="h-5 w-5 shrink-0 text-emerald-500" />
-                            </div>
-                        </div>
-                    </div>
-                </div>
-                <button
-                    v-if="canRegisterPush && !pushRegistered"
-                    class="hidden rounded-lg px-3 py-2 text-sm text-white/80 hover:bg-white/10 hover:text-white md:block"
-                    :class="{ '!block': !showMobileHamburger }"
-                    :disabled="pushSubscribing"
-                    @click="registerPushSubscription"
-                >
-                    {{ pushSubscribing ? 'Ativando…' : 'Ativar notificações' }}
-                </button>
-                <button
-                    v-if="user"
-                    type="button"
-                    class="relative flex h-9 w-9 items-center justify-center rounded-lg text-white/90 drop-shadow transition hover:bg-white/10"
-                    aria-label="Notificações"
-                    @click="notificationsPanelOpen = true"
-                >
-                    <Bell class="h-5 w-5" />
-                    <span
-                        v-if="memberNotificationsUnreadCount > 0"
-                        class="absolute -right-0.5 -top-0.5 flex h-4 min-w-[1rem] items-center justify-center rounded-full px-1 text-[10px] font-semibold text-white"
-                        :style="{ backgroundColor: 'var(--ma-primary)' }"
-                    >
-                        {{ memberNotificationsUnreadCount > 99 ? '99+' : memberNotificationsUnreadCount }}
-                    </span>
-                </button>
-                <div v-if="user" ref="accountMenuRef" class="relative">
-                    <button
-                        type="button"
-                        class="flex items-center gap-2 rounded-lg px-2 py-1.5 text-white/90 drop-shadow hover:bg-white/10"
-                        :aria-expanded="accountMenuOpen"
-                        aria-haspopup="true"
-                        @click.stop="accountMenuOpen = !accountMenuOpen"
-                    >
-                        <span
-                            class="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-full text-xs font-medium"
-                            :style="{ backgroundColor: 'var(--ma-primary)' }"
-                        >
-                            <img
-                                v-if="user.avatar_url"
-                                :src="user.avatar_url"
-                                :alt="user.name"
-                                class="h-full w-full object-cover"
-                            />
-                            <span v-else>{{ initials }}</span>
-                        </span>
-                        <span class="hidden max-w-[100px] truncate text-sm font-medium md:inline">{{ user.name }}</span>
-                        <ChevronDown
-                            class="h-4 w-4 shrink-0 transition-transform"
-                            :class="{ 'rotate-180': accountMenuOpen }"
-                        />
-                    </button>
-                    <div
-                        v-show="accountMenuOpen"
-                        class="absolute right-0 z-50 mt-2 w-56 rounded-xl border border-zinc-200 bg-white py-1 shadow-lg dark:border-zinc-700 dark:bg-zinc-900"
-                        role="menu"
-                    >
-                        <div class="border-b border-zinc-100 px-4 py-3 dark:border-zinc-700">
-                            <p class="truncate text-sm font-medium text-zinc-900 dark:text-zinc-100">{{ user.name }}</p>
-                            <p class="truncate text-xs text-zinc-500 dark:text-zinc-400">{{ user.email }}</p>
-                        </div>
-                        <a
-                            v-if="showBackToPanel"
-                            :href="backToPanelHref"
-                            class="flex w-full items-center gap-2 px-4 py-2.5 text-left text-sm font-medium text-zinc-700 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800"
-                            role="menuitem"
-                            @click="accountMenuOpen = false"
-                        >
-                            <ArrowLeft class="h-4 w-4" />
-                            {{ backToPanelLabel }}
-                        </a>
-                        <button
-                            type="button"
-                            class="flex w-full items-center gap-2 px-4 py-2.5 text-left text-sm font-medium text-zinc-700 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800"
-                            role="menuitem"
-                            @click="openAccountModal"
-                        >
-                            <User class="h-4 w-4" />
-                            Minha conta
-                        </button>
-                        <Link
-                            :href="logoutHref"
-                            method="post"
-                            as="button"
-                            class="flex w-full items-center gap-2 px-4 py-2.5 text-left text-sm font-medium text-zinc-700 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800"
-                            role="menuitem"
-                            @click="accountMenuOpen = false"
-                        >
-                            Sair
-                        </Link>
-                    </div>
-                </div>
-            </div>
-        </header>
+        <!-- Hub sidebar — desktop -->
+        <StudentHubSidebar
+            class="hidden shrink-0 lg:flex"
+            :student_branding="student_branding"
+            :hub_nav="hub_nav"
+            :profile_href="profile_href"
+            :suporte_href="suporte_href"
+            active=""
+            variant="navy"
+            :show-sidebar-logout="false"
+            :collapsed="hubSidebarCollapsed"
+            @update:collapsed="hubSidebarCollapsed = $event"
+        />
 
-        <!-- Overlay + painel do menu mobile (hamburger) -->
-        <Teleport to="body">
-            <div
-                v-if="mobileMenuOpen"
-                class="fixed inset-0 z-40 md:hidden"
-                aria-hidden="true"
+        <div class="flex min-h-0 min-w-0 flex-1 flex-col">
+            <!-- Topbar compacta -->
+            <header
+                class="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-[var(--lesson-border)] bg-[var(--lesson-surface)] px-4 print:hidden lg:px-5"
             >
-                <div
-                    class="absolute inset-0 bg-black/50 backdrop-blur-sm"
-                    @click="closeMobileMenu"
-                />
-                <div
-                    class="absolute right-0 top-0 bottom-0 flex h-full w-72 max-w-[85vw] flex-col border-l border-zinc-700 bg-zinc-900 shadow-2xl"
-                    :style="{ paddingTop: '3.5rem' }"
-                >
+                <div class="flex min-w-0 items-center gap-2">
                     <button
                         type="button"
-                        class="absolute right-3 top-3 rounded-lg p-2 text-zinc-400 hover:bg-zinc-800 hover:text-white"
-                        aria-label="Fechar menu"
-                        @click="closeMobileMenu"
+                        class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-[var(--lesson-border)] bg-[var(--lesson-bg)] text-[var(--lesson-text-2)] lg:hidden"
+                        aria-label="Menu"
+                        @click="hubMobileOpen = true"
                     >
-                        <X class="h-5 w-5" />
+                        <Menu class="h-5 w-5" />
                     </button>
-                    <nav class="flex flex-col gap-1 px-4 py-2">
-                        <template v-for="item in sidebarItems" :key="item.title">
-                            <a
-                                v-if="item.open_external"
-                                :href="item.link"
-                                target="_blank"
-                                rel="noopener"
-                                class="rounded-lg px-4 py-3 text-sm font-medium text-zinc-200 hover:bg-zinc-800 hover:text-white"
-                                @click="closeMobileMenu"
-                            >
-                                {{ item.title }}
-                            </a>
-                            <Link
-                                v-else
-                                :href="item.link.startsWith('/') ? basePath + item.link : basePath + '/' + item.link"
-                                class="rounded-lg px-4 py-3 text-sm font-medium text-zinc-200 hover:bg-zinc-800 hover:text-white"
-                                @click="closeMobileMenu"
-                            >
-                                {{ item.title }}
-                            </Link>
-                        </template>
-                    </nav>
-                    <div v-if="canRegisterPush && !pushRegistered" class="border-t border-zinc-700 px-4 py-3">
+                    <Link :href="basePath" class="flex min-w-0 items-center gap-2 truncate">
+                        <img
+                            v-if="headerLogo"
+                            :src="headerLogo"
+                            :alt="product?.name || 'Curso'"
+                            class="hidden h-7 w-auto max-w-[140px] object-contain sm:block"
+                        />
+                        <span class="truncate text-sm font-bold text-[var(--lesson-text)] sm:text-base">
+                            {{ product?.name || pageTitle }}
+                        </span>
+                    </Link>
+                </div>
+                <div class="flex shrink-0 items-center gap-1.5">
+                    <button
+                        v-if="canRegisterPush && !pushRegistered"
+                        type="button"
+                        class="hidden rounded-lg px-2.5 py-1.5 text-xs font-medium text-[var(--lesson-text-2)] hover:bg-[var(--lesson-bg)] md:block"
+                        :disabled="pushSubscribing"
+                        @click="registerPushSubscription"
+                    >
+                        {{ pushSubscribing ? 'Ativando…' : 'Notificações' }}
+                    </button>
+                    <button
+                        v-if="user"
+                        type="button"
+                        class="relative flex h-9 w-9 items-center justify-center rounded-lg text-[var(--lesson-text-2)] transition hover:bg-[var(--lesson-bg)]"
+                        aria-label="Notificações"
+                        @click="notificationsPanelOpen = true"
+                    >
+                        <Bell class="h-5 w-5" />
+                        <span
+                            v-if="memberNotificationsUnreadCount > 0"
+                            class="absolute -right-0.5 -top-0.5 flex h-4 min-w-[1rem] items-center justify-center rounded-full px-1 text-[10px] font-semibold text-white"
+                            :style="{ backgroundColor: 'var(--student-primary)' }"
+                        >
+                            {{ memberNotificationsUnreadCount > 99 ? '99+' : memberNotificationsUnreadCount }}
+                        </span>
+                    </button>
+                    <div v-if="user" ref="accountMenuRef" class="relative">
                         <button
                             type="button"
-                            class="w-full rounded-lg bg-zinc-800 px-4 py-3 text-sm font-medium text-zinc-200 hover:bg-zinc-700"
-                            :disabled="pushSubscribing"
-                            @click="registerPushSubscription(); closeMobileMenu()"
+                            class="flex items-center gap-2 rounded-lg px-1.5 py-1 hover:bg-[var(--lesson-bg)]"
+                            :aria-expanded="accountMenuOpen"
+                            @click.stop="accountMenuOpen = !accountMenuOpen"
                         >
-                            {{ pushSubscribing ? 'Ativando…' : 'Ativar notificações' }}
-                        </button>
-                    </div>
-                    <div v-if="user" class="mt-auto border-t border-zinc-700 px-4 py-4">
-                        <div class="mb-3 flex items-center gap-3">
                             <span
-                                class="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-full text-sm font-medium text-white"
-                                :style="{ backgroundColor: 'var(--ma-primary)' }"
+                                class="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-full text-xs font-semibold text-white"
+                                :style="{ backgroundColor: 'var(--student-primary)' }"
                             >
-                                <img
-                                    v-if="user.avatar_url"
-                                    :src="user.avatar_url"
-                                    :alt="user.name"
-                                    class="h-full w-full object-cover"
-                                />
+                                <img v-if="user.avatar_url" :src="user.avatar_url" :alt="user.name" class="h-full w-full object-cover" />
                                 <span v-else>{{ initials }}</span>
                             </span>
-                            <div class="min-w-0">
-                                <p class="truncate font-medium text-zinc-100">{{ user.name }}</p>
-                                <p class="truncate text-xs text-zinc-500">{{ user.email }}</p>
-                            </div>
-                        </div>
-                        <div class="flex flex-col gap-1">
-                            <a
-                                v-if="showBackToPanel"
-                                :href="backToPanelHref"
-                                class="flex w-full items-center gap-2 rounded-lg px-4 py-3 text-left text-sm font-medium text-zinc-300 hover:bg-zinc-800"
-                                @click="closeMobileMenu"
-                            >
-                                <ArrowLeft class="h-4 w-4" />
-                                {{ backToPanelLabel }}
-                            </a>
+                            <ChevronDown class="hidden h-4 w-4 text-[var(--lesson-text-3)] sm:block" />
+                        </button>
+                        <div
+                            v-show="accountMenuOpen"
+                            class="absolute right-0 z-50 mt-2 w-52 rounded-xl border border-[var(--lesson-border)] bg-white py-1 shadow-lg"
+                        >
                             <button
                                 type="button"
-                                class="flex w-full items-center gap-2 rounded-lg px-4 py-3 text-left text-sm font-medium text-zinc-300 hover:bg-zinc-800"
-                                @click="openAccountModal(); closeMobileMenu()"
+                                class="flex w-full items-center gap-2 px-4 py-2.5 text-left text-sm text-[var(--lesson-text-2)] hover:bg-[var(--lesson-bg)]"
+                                @click="openAccountModal(); accountMenuOpen = false"
                             >
                                 <User class="h-4 w-4" />
                                 Minha conta
@@ -790,22 +609,49 @@ watch(
                                 :href="logoutHref"
                                 method="post"
                                 as="button"
-                                class="flex w-full items-center gap-2 rounded-lg px-4 py-3 text-left text-sm font-medium text-zinc-300 hover:bg-zinc-800"
-                                @click="closeMobileMenu"
+                                class="flex w-full items-center gap-2 px-4 py-2.5 text-left text-sm text-[var(--lesson-text-2)] hover:bg-[var(--lesson-bg)]"
                             >
+                                <LogOut class="h-4 w-4" />
                                 Sair
                             </Link>
                         </div>
                     </div>
                 </div>
-            </div>
-        </Teleport>
+            </header>
 
-        <div class="min-h-screen pt-14 print:pt-0" :style="{ backgroundColor: 'var(--ma-bg)', color: 'var(--ma-text)' }">
-            <main class="px-6 pb-6 print:p-0 sm:px-8 lg:px-10 xl:px-12">
+            <main class="flex min-h-0 flex-1 flex-col overflow-hidden print:overflow-visible">
                 <slot />
             </main>
         </div>
+
+        <!-- Hub sidebar mobile drawer -->
+        <Teleport to="body">
+            <div v-if="hubMobileOpen" class="fixed inset-0 z-50 lg:hidden" aria-hidden="false">
+                <div class="absolute inset-0 bg-black/50" @click="hubMobileOpen = false" />
+                <div class="absolute left-0 top-0 bottom-0 flex w-[min(100%,280px)] shadow-2xl">
+                    <StudentHubSidebar
+                        class="h-full w-full"
+                        :student_branding="student_branding"
+                        :hub_nav="hub_nav"
+                        :profile_href="profile_href"
+                        :suporte_href="suporte_href"
+                        active=""
+                        variant="navy"
+                        :show-sidebar-logout="false"
+                        :show_collapse="false"
+                    />
+                    <button
+                        type="button"
+                        class="absolute right-2 top-3 z-10 rounded-lg p-2 text-white/80 hover:bg-white/10"
+                        aria-label="Fechar"
+                        @click="hubMobileOpen = false"
+                    >
+                        <X class="h-5 w-5" />
+                    </button>
+                </div>
+            </div>
+        </Teleport>
+
         <PwaInstallPrompt v-if="slug" :app-name="appName" :slug="slug" />
         <MemberAreaNotificationsPanel
             :open="notificationsPanelOpen"

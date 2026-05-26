@@ -1,0 +1,15 @@
+/* Tokens — layout de aula (referência AULAS-V1) */
+.member-lesson-shell {
+    --lesson-bg: #eef2f8;
+    --lesson-bg2: #e3e9f4;
+    --lesson-surface: #ffffff;
+    --lesson-border: #d5dded;
+    --lesson-border2: #bbc8e0;
+    --lesson-text: #0a1628;
+    --lesson-text-2: #3d526e;
+    --lesson-text-3: #7e95b4;
+    --lesson-pdf-bg: #c8d4e8;
+    --lesson-hub-w: 252px;
+    --lesson-rs-w: 308px;
+    --lesson-topbar-h: 56px;
+}
