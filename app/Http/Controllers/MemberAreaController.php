@@ -406,7 +406,7 @@ class MemberAreaController extends Controller
      */
     private function recommendedProductIdsForOwnedCourses(array $ownedProductIds): array
     {
-        if ($ownedProductIds === []) {
+        if ($ownedProductIds === [] || ! Schema::hasTable('product_recommended_products')) {
             return [];
         }
 
