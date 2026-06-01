@@ -498,20 +498,70 @@ const canMigrateStorage = computed(
 async function migrateStorageToRemote() {
     storageTestResult.value = { status: null, message: '' };
     storageMigrateLoading.value = true;
+
+    let offset = 0;
+    let totalTransferred = 0;
+    let totalFailed = 0;
+    let lastErrors = [];
+    const batchSize = 20;
+
     try {
-        const res = await window.axios.post('/configuracoes/storage/migrate');
-        const d = res.data;
-        storageTestResult.value = {
-            status: 'success',
-            message: d.message || `${d.transferred ?? 0} arquivo(s) transferido(s) com sucesso.`,
-        };
+        while (true) {
+            const res = await window.axios.post('/configuracoes/storage/migrate', {
+                offset,
+                batch_size: batchSize,
+                reset: offset === 0,
+            });
+            const d = res.data ?? {};
+
+            totalTransferred += Number(d.transferred ?? 0);
+            totalFailed += Number(d.failed ?? 0);
+            if (Array.isArray(d.errors) && d.errors.length) {
+                lastErrors = d.errors;
+            }
+
+            if (d.done) {
+                let message =
+                    totalFailed === 0
+                        ? `${totalTransferred} arquivo(s) transferido(s) com sucesso.`
+                        : `${totalTransferred} transferido(s), ${totalFailed} falha(s).`;
+                if (Number(d.normalized) > 0) {
+                    message += ` ${d.normalized} referência(s) no banco atualizada(s).`;
+                }
+                if (lastErrors[0]?.message) {
+                    message += ` (${lastErrors[0].message})`;
+                }
+                storageTestResult.value = { status: 'success', message };
+                break;
+            }
+
+            const total = Number(d.total ?? 0);
+            const processed = Number(d.processed ?? d.next_offset ?? offset);
+            storageTestResult.value = {
+                status: 'success',
+                message: d.message || `Transferindo… ${processed} de ${total}`,
+            };
+
+            offset = Number(d.next_offset ?? processed);
+            if (offset <= 0 && !d.done) {
+                throw new Error('Resposta inválida do servidor durante a migração.');
+            }
+        }
     } catch (e) {
         const data = e?.response?.data;
-        let message = data?.message || data?.error || 'Erro ao transferir arquivos.';
+        let message = data?.message || data?.error || e?.message || 'Erro ao transferir arquivos.';
         if (data?.errors && Array.isArray(data.errors) && data.errors[0]?.message) {
             message += ' ' + data.errors[0].message;
+        } else if (e?.response?.status === 504) {
+            message +=
+                ' O servidor demorou demais (timeout). Tente novamente — a migração continua em lotes menores.';
         }
         storageTestResult.value = { status: 'error', message };
+        try {
+            await window.axios.post('/configuracoes/storage/migrate', { cancel: true });
+        } catch (_) {
+            /* ignore */
+        }
     } finally {
         storageMigrateLoading.value = false;
     }
