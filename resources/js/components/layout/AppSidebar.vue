@@ -22,6 +22,7 @@ import {
     LifeBuoy,
     GraduationCap,
     RotateCcw,
+    Bell,
 } from 'lucide-vue-next';
 import { useSidebar } from '@/composables/useSidebar';
 import ConquistasWidget from '@/components/layout/ConquistasWidget.vue';
@@ -79,6 +80,7 @@ const navItems = computed(() => {
     if (canView('vendas.view')) items.push({ name: 'Vendas', href: '/vendas', icon: CircleDollarSign });
     if (canView('produtos.view')) items.push({ name: 'Produtos', href: '/produtos', icon: Package });
     if (canView('produtos.view')) items.push({ name: 'Alunos', href: '/produtos/alunos', icon: Users });
+    if (canView('produtos.view')) items.push({ name: 'Notificações push', href: '/notificacoes-push', icon: Bell });
     if (canView('relatorios.view')) items.push({ name: 'Relatórios', href: '/relatorios', icon: BarChart3 });
     if (canView('integracoes.view')) items.push({ name: 'Integrações', href: '/integracoes', icon: Cable });
     if (canView('email_marketing.view')) items.push({ name: 'E-mail Marketing', href: '/email-marketing', icon: Mail });

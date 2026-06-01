@@ -1,16 +1,22 @@
 <script setup>
-import { ref, onMounted, onUnmounted, watch } from 'vue';
-import { X, Smartphone, Share } from 'lucide-vue-next';
+import { ref, onMounted, onUnmounted, watch, computed } from 'vue';
+import { X, Smartphone, Share, Bell } from 'lucide-vue-next';
 import { usePwaInstall } from '@/composables/usePwaInstall';
 
 const props = defineProps({
     appName: { type: String, default: 'App' },
     slug: { type: String, required: true },
+    pushEnabled: { type: Boolean, default: false },
+    pushRegistered: { type: Boolean, default: false },
+    registerPush: { type: Function, default: null },
+    shouldShowNotificationBanner: { type: Function, default: null },
+    dismissNotificationBanner: { type: Function, default: null },
 });
 
 const {
     installPromptEvent,
     showIosInstructions,
+    showNotificationPromptAfterInstall,
     isStandalone,
     isIos,
     tryGetDismissed,
@@ -18,35 +24,106 @@ const {
     triggerInstall,
     registerListener,
     unregisterListener,
+    syncInstallPromptFromWindow,
+    openIosInstructions,
 } = usePwaInstall(props.slug);
 
 const showBanner = ref(false);
+const showNotificationBanner = ref(false);
+const notificationPromptLoading = ref(false);
 
-// Quando o evento for capturado (Android), mostrar o banner se o usuário não dispensou
+const canPromptNotifications = computed(() => props.pushEnabled && typeof props.registerPush === 'function');
+
 watch(
     installPromptEvent,
     (e) => {
-        if (e && !isStandalone.value && !tryGetDismissed()) showBanner.value = true;
+        if (e && !isStandalone.value && !tryGetDismissed()) {
+            showBanner.value = true;
+        }
     },
-    { immediate: true }
+    { immediate: true },
 );
 
-function install() {
-    triggerInstall().then(() => {
-        showBanner.value = false;
-    });
+function refreshNotificationBanner() {
+    if (!canPromptNotifications.value || props.pushRegistered) {
+        showNotificationBanner.value = false;
+        return;
+    }
+    if (props.shouldShowNotificationBanner?.()) {
+        showNotificationBanner.value = true;
+        return;
+    }
+    if (showNotificationPromptAfterInstall.value) {
+        showNotificationBanner.value = true;
+    }
 }
 
+watch(
+    () => [props.pushRegistered, showNotificationPromptAfterInstall.value],
+    () => refreshNotificationBanner(),
+    { immediate: true },
+);
+
+async function install() {
+    await triggerInstall();
+    showBanner.value = false;
+    if (canPromptNotifications.value) {
+        setTimeout(refreshNotificationBanner, 500);
+    }
+}
+
+function closeNotificationBanner(dismissed = false) {
+    if (dismissed && props.dismissNotificationBanner) {
+        props.dismissNotificationBanner();
+    }
+    showNotificationBanner.value = false;
+    showNotificationPromptAfterInstall.value = false;
+}
+
+async function allowNotifications() {
+    if (!canPromptNotifications.value) {
+        closeNotificationBanner();
+        return;
+    }
+    notificationPromptLoading.value = true;
+    try {
+        const ok = await props.registerPush({ requestPermission: true });
+        if (!ok && typeof Notification !== 'undefined' && Notification.permission === 'default') {
+            /* usuário fechou o diálogo do sistema */
+        }
+    } catch (_) {
+        /* ignore */
+    }
+    notificationPromptLoading.value = false;
+    closeNotificationBanner(false);
+}
+
+let iosPromptTimer = null;
+let notificationTimer = null;
+
 onMounted(() => {
-    if (isStandalone.value) return;
+    if (isStandalone.value) {
+        notificationTimer = setTimeout(refreshNotificationBanner, 400);
+        return;
+    }
     registerListener();
-    if (isIos.value && !tryGetDismissed() && !isStandalone.value) {
-        showIosInstructions.value = true;
+    syncInstallPromptFromWindow();
+    if (installPromptEvent.value && !tryGetDismissed()) {
+        showBanner.value = true;
+    }
+    if (isIos.value && !isStandalone.value && !tryGetDismissed()) {
+        iosPromptTimer = setTimeout(() => {
+            if (!isStandalone.value && !tryGetDismissed()) {
+                openIosInstructions();
+            }
+        }, 800);
     }
 });
 
 onUnmounted(() => {
     unregisterListener();
+    if (iosPromptTimer) clearTimeout(iosPromptTimer);
+    if (notificationTimer) clearTimeout(notificationTimer);
 });
 </script>
 
@@ -87,6 +164,53 @@ onUnmounted(() => {
                         class="shrink-0 rounded-lg p-2 text-zinc-400 transition hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-700 dark:hover:text-zinc-300"
                         aria-label="Fechar"
                         @click="dismiss(); showBanner = false"
+                    >
+                        <X class="h-5 w-5" />
+                    </button>
+                </div>
+            </div>
+        </div>
+    </Transition>
+
+    <!-- Banner: Ativar notificações (após instalar ou em standalone) -->
+    <Transition
+        enter-active-class="transition duration-300 ease-out"
+        enter-from-class="translate-y-full opacity-0"
+        enter-to-class="translate-y-0 opacity-100"
+        leave-active-class="transition duration-200 ease-in"
+        leave-from-class="translate-y-0 opacity-100"
+        leave-to-class="translate-y-full opacity-0"
+    >
+        <div
+            v-if="showNotificationBanner && canPromptNotifications && !pushRegistered"
+            class="fixed bottom-0 left-0 right-0 z-[51] border-t border-violet-200 bg-white p-4 shadow-2xl dark:border-violet-900/50 dark:bg-zinc-800"
+        >
+            <div class="mx-auto flex max-w-md items-center justify-between gap-4">
+                <div class="flex items-center gap-3">
+                    <div class="flex h-12 w-12 items-center justify-center rounded-xl bg-violet-500/15 text-violet-600">
+                        <Bell class="h-6 w-6" />
+                    </div>
+                    <div>
+                        <p class="font-semibold text-zinc-900 dark:text-zinc-100">Ativar notificações</p>
+                        <p class="text-sm text-zinc-500 dark:text-zinc-400">
+                            Receba avisos de novas aulas e novidades do curso.
+                        </p>
+                    </div>
+                </div>
+                <div class="flex shrink-0 items-center gap-2">
+                    <button
+                        type="button"
+                        class="rounded-xl bg-violet-600 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-violet-700 disabled:opacity-60"
+                        :disabled="notificationPromptLoading"
+                        @click="allowNotifications"
+                    >
+                        {{ notificationPromptLoading ? 'Ativando…' : 'Ativar' }}
+                    </button>
+                    <button
+                        type="button"
+                        class="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-700"
+                        aria-label="Agora não"
+                        @click="closeNotificationBanner(true)"
                     >
                         <X class="h-5 w-5" />
                     </button>

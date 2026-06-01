@@ -2,7 +2,7 @@
 import { computed, ref, toRef } from 'vue';
 import { Link, usePage } from '@inertiajs/vue3';
 import StudentAreaBackToPanelLink from '@/components/student/StudentAreaBackToPanelLink.vue';
-import { useStudentAreaSidebarLogo } from '@/composables/useStudentAreaLogo';
+import { resolveStudentAreaLogoUrl, useStudentAreaSidebarLogo } from '@/composables/useStudentAreaLogo';
 import {
     Award,
     Bookmark,
@@ -34,8 +34,8 @@ const props = defineProps({
     show_collapse: { type: Boolean, default: true },
     /** Navy sidebar (course app) vs light (hub dashboard) */
     variant: { type: String, default: 'light' },
-    /** Logout no rodapé da sidebar; no layout da aula fica só no menu do avatar */
-    showSidebarLogout: { type: Boolean, default: true },
+    /** Logout no rodapé da sidebar (desativado por padrão — usar menu do avatar no header) */
+    showSidebarLogout: { type: Boolean, default: false },
 });
 
 const emit = defineEmits(['update:collapsed', 'navigate']);
@@ -60,7 +60,16 @@ function onNavClick() {
 }
 
 const collapsedLocal = ref(props.collapsed);
-const { sidebarLogoUrl } = useStudentAreaSidebarLogo(toRef(props, 'student_branding'), collapsedLocal);
+const { sidebarLogoUrl: sidebarLogoUrlAuto } = useStudentAreaSidebarLogo(
+    toRef(props, 'student_branding'),
+    collapsedLocal,
+);
+/** Sidebar navy = fundo escuro: logo “tema escuro” do white label (hub remove `dark` do html). */
+const sidebarLogoUrl = computed(() =>
+    props.variant === 'navy'
+        ? resolveStudentAreaLogoUrl(props.student_branding, true, collapsedLocal.value)
+        : sidebarLogoUrlAuto.value,
+);
 
 function toggleCollapsed() {
     collapsedLocal.value = !collapsedLocal.value;

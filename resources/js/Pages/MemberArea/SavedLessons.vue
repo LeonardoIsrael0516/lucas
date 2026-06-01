@@ -3,6 +3,7 @@ import { computed, ref } from 'vue';
 import { Link, usePage } from '@inertiajs/vue3';
 import StudentAreaDocumentHead from '@/components/student/StudentAreaDocumentHead.vue';
 import StudentHubSidebar from '@/components/student/StudentHubSidebar.vue';
+import StudentHubAccountMenu from '@/components/student/StudentHubAccountMenu.vue';
 import StudentAreaBackToPanelLink from '@/components/student/StudentAreaBackToPanelLink.vue';
 import { Bookmark, ChevronRight, ExternalLink } from 'lucide-vue-next';
 
@@ -46,7 +47,10 @@ const coursesHref = computed(() => {
             <header class="shrink-0 border-b border-zinc-200 bg-white px-4 py-3 md:px-6">
                 <div class="flex items-center justify-between gap-3">
                     <h1 class="text-lg font-semibold md:text-xl">Aulas salvas</h1>
-                    <StudentAreaBackToPanelLink variant="header" />
+                    <div class="flex shrink-0 items-center gap-2">
+                        <StudentAreaBackToPanelLink variant="header" />
+                        <StudentHubAccountMenu :profile-href="profile_href" :show-name="false" />
+                    </div>
                 </div>
             </header>
 

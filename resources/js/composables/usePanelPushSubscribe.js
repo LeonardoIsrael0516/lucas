@@ -1,19 +1,10 @@
 import { ref, onMounted, onUnmounted, computed } from 'vue';
 import axios from 'axios';
 import { usePage } from '@inertiajs/vue3';
-
-function urlBase64ToUint8Array(base64String) {
-    const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
-    const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
-    const rawData = window.atob(base64);
-    const outputArray = new Uint8Array(rawData.length);
-    for (let i = 0; i < rawData.length; ++i) outputArray[i] = rawData.charCodeAt(i);
-    return outputArray;
-}
+import { ensurePushSubscription, serializePushSubscription } from '@/utils/pushSubscription';
 
 /**
  * Registra o Service Worker do painel e subscribe para push.
- * Usar no AppLayout - usa push_enabled e vapid_public das props compartilhadas.
  */
 export function usePanelPushSubscribe() {
     const page = usePage();
@@ -23,20 +14,8 @@ export function usePanelPushSubscribe() {
     const pushRegistered = ref(false);
     const lastPushError = ref(null);
 
-    function serializeSubscription(sub) {
-        const p256dh = sub?.getKey?.('p256dh');
-        const auth = sub?.getKey?.('auth');
-        return {
-            endpoint: sub?.endpoint,
-            keys: {
-                p256dh: p256dh ? btoa(String.fromCharCode.apply(null, new Uint8Array(p256dh))) : '',
-                auth: auth ? btoa(String.fromCharCode.apply(null, new Uint8Array(auth))) : '',
-            },
-        };
-    }
-
     async function syncSubscriptionToServer(sub) {
-        const payload = serializeSubscription(sub);
+        const payload = serializePushSubscription(sub);
         if (!payload.endpoint || !payload.keys?.p256dh || !payload.keys?.auth) return false;
         const { data } = await axios.post('/painel/push-subscribe', payload);
         return !!data?.success;
@@ -51,7 +30,6 @@ export function usePanelPushSubscribe() {
         }
 
         try {
-            // Scope restrito evita registros legados em '/' (isso pode quebrar no Android após updates).
             await navigator.serviceWorker.register('/painel-sw.js', { scope: '/painel/' });
         } catch (e) {
             console.warn('Panel SW registration failed:', e);
@@ -81,17 +59,15 @@ export function usePanelPushSubscribe() {
                 lastPushError.value = 'service_worker_not_found';
                 return false;
             }
-            const existing = await reg.pushManager?.getSubscription?.();
-            if (existing) {
-                const synced = await syncSubscriptionToServer(existing);
-                pushRegistered.value = synced;
-                if (!synced) lastPushError.value = 'subscription_sync_failed';
-                return synced;
-            }
-            const sub = await reg.pushManager.subscribe({
-                userVisibleOnly: true,
-                applicationServerKey: urlBase64ToUint8Array(vapidPublic.value),
+            const sub = await ensurePushSubscription({
+                reg,
+                vapidPublic: vapidPublic.value,
+                scope: '/painel/',
             });
+            if (!sub) {
+                lastPushError.value = 'subscription_failed';
+                return false;
+            }
             const synced = await syncSubscriptionToServer(sub);
             pushRegistered.value = synced;
             if (!synced) lastPushError.value = 'subscription_sync_failed';
@@ -109,31 +85,35 @@ export function usePanelPushSubscribe() {
         }
     }
 
-    /** Apenas verifica se já existe subscription no browser e atualiza pushRegistered (sem POST). Útil ao reabrir o app. */
     async function checkExistingSubscription() {
         lastPushError.value = null;
         pushRegistered.value = false;
-        if (typeof navigator === 'undefined' || !navigator.serviceWorker?.getRegistration) return;
+        if (typeof navigator === 'undefined' || !navigator.serviceWorker?.getRegistration) return false;
         if (typeof Notification !== 'undefined' && Notification.permission !== 'granted') return false;
+        if (!pushEnabled.value || !vapidPublic.value) return false;
         try {
             await navigator.serviceWorker.register('/painel-sw.js', { scope: '/painel/' });
             const reg = await navigator.serviceWorker.getRegistration('/painel/');
-            const existing = await reg?.pushManager?.getSubscription?.();
-            if (existing) {
-                const synced = await syncSubscriptionToServer(existing);
-                pushRegistered.value = synced;
-                if (!synced) {
-                    lastPushError.value = 'subscription_sync_failed';
-                }
-                return synced;
+            if (!reg?.pushManager) return false;
+            const sub = await ensurePushSubscription({
+                reg,
+                vapidPublic: vapidPublic.value,
+                scope: '/painel/',
+            });
+            if (!sub) return false;
+            const synced = await syncSubscriptionToServer(sub);
+            pushRegistered.value = synced;
+            if (!synced) {
+                lastPushError.value = 'subscription_sync_failed';
             }
+            return synced;
+        } catch (_) {
             return false;
-        } catch (_) {}
-        return false;
+        }
     }
 
     const notificationPermission = computed(() =>
-        typeof Notification !== 'undefined' ? Notification.permission : 'default'
+        typeof Notification !== 'undefined' ? Notification.permission : 'default',
     );
 
     const isStandalone = computed(() => {
@@ -148,7 +128,6 @@ export function usePanelPushSubscribe() {
     let permissionCheckInterval = null;
 
     onMounted(() => {
-        // Em standalone com permissão "default", não inscrever de imediato; quando o usuário permitir, inscrever
         if (isStandalone.value && notificationPermission.value === 'default') {
             permissionCheckInterval = setInterval(() => {
                 if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {

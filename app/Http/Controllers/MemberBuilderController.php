@@ -16,7 +16,6 @@ use App\Models\MemberSection;
 use App\Models\MemberTurma;
 use App\Models\Product;
 use App\Models\User;
-use App\Models\MemberNotification;
 use App\Models\MemberPushSubscription;
 use Illuminate\Support\Facades\Hash;
 use App\Services\MemberAreaResolver;
@@ -35,10 +34,6 @@ use Illuminate\Support\Str;
 use Illuminate\View\View;
 use Inertia\Inertia;
 use Inertia\Response;
-use Minishlink\WebPush\VAPID;
-use Minishlink\WebPush\WebPush;
-use Minishlink\WebPush\Subscription;
-
 class MemberBuilderController extends Controller
 {
     private function normalizeLessonContentFiles(mixed $input): array
@@ -455,17 +450,29 @@ class MemberBuilderController extends Controller
         if (! is_array($incoming)) {
             $incoming = [];
         }
-        // Member Builder: apenas comentários por produto; restante é global (Área do aluno).
-        $existing = $produto->member_area_config ?? [];
-        $config = [
-            'comments_enabled' => (bool) ($incoming['comments_enabled'] ?? $existing['comments_enabled'] ?? false),
-            'comments_require_approval' => (bool) ($incoming['comments_require_approval'] ?? $existing['comments_require_approval'] ?? true),
-        ];
-        if (isset($existing['certificate']['completion_percent'])) {
-            $config['certificate'] = ['completion_percent' => (int) $existing['certificate']['completion_percent']];
-        }
-        $produto->update(['member_area_config' => $config]);
+        $existing = is_array($produto->member_area_config) ? $produto->member_area_config : [];
+        $defaults = Product::defaultMemberAreaConfig();
+        $config = array_replace_recursive($defaults, $existing, $incoming);
+        $config['comments_enabled'] = (bool) ($incoming['comments_enabled'] ?? $config['comments_enabled'] ?? false);
+        $config['comments_require_approval'] = (bool) ($incoming['comments_require_approval'] ?? $config['comments_require_approval'] ?? true);
+
         $vapidWarning = null;
+        $pwa = is_array($config['pwa'] ?? null) ? $config['pwa'] : [];
+        if ((bool) ($pwa['push_enabled'] ?? false)) {
+            $hasPublic = trim((string) ($pwa['vapid_public'] ?? '')) !== '';
+            $hasPrivate = trim((string) ($pwa['vapid_private'] ?? '')) !== '';
+            if (! $hasPublic || ! $hasPrivate) {
+                $keys = $this->createVapidKeysViaOpensslCli();
+                if ($keys !== null) {
+                    $config['pwa']['vapid_public'] = $keys['publicKey'];
+                    $config['pwa']['vapid_private'] = $keys['privateKey'];
+                } else {
+                    $vapidWarning = 'Não foi possível gerar as chaves VAPID automaticamente. Verifique se o OpenSSL está disponível no servidor.';
+                }
+            }
+        }
+
+        $produto->update(['member_area_config' => $config]);
 
         \Illuminate\Support\Facades\Log::info('MemberBuilder updateConfig', [
             'product_id' => $produto->id,
@@ -1728,96 +1735,28 @@ class MemberBuilderController extends Controller
         ])->values()->all();
     }
 
-    public function sendPushNotification(Request $request, Product $produto): JsonResponse
+    public function sendPushNotification(Request $request, Product $produto, \App\Services\MemberPushService $memberPushService): JsonResponse
     {
         $this->authorizeProduct($produto);
-        if ($produto->type !== Product::TYPE_AREA_MEMBROS) {
-            abort(403);
-        }
-        $config = $produto->member_area_config;
-        $pwa = $config['pwa'] ?? [];
-        if (! ((bool) ($pwa['push_enabled'] ?? false))) {
-            return response()->json(['message' => 'Notificações push não estão habilitadas para esta área.'], 403);
-        }
         $validated = $request->validate([
             'title' => ['required', 'string', 'max:100'],
             'body' => ['required', 'string', 'max:200'],
         ]);
-        $vapidPublic = $produto->member_area_config['pwa']['vapid_public'] ?? null;
-        $vapidPrivate = $produto->member_area_config['pwa']['vapid_private'] ?? null;
-        if (! $vapidPublic || ! $vapidPrivate) {
-            return response()->json(['message' => 'Gere as chaves VAPID: ative as notificações push e salve a configuração.'], 400);
+        $result = $memberPushService->sendToProduct($produto, $validated['title'], $validated['body']);
+        if ($result['sent'] === 0 && str_contains($result['message'], 'não estão habilitadas')) {
+            return response()->json(['message' => $result['message']], 403);
         }
-        $subscriptions = MemberPushSubscription::where('product_id', $produto->id)->get();
-        $sent = 0;
-        $subject = 'mailto:' . (config('mail.from.address') ?: 'noreply@' . parse_url(config('app.url'), PHP_URL_HOST));
-        $auth = [
-            'VAPID' => [
-                'subject' => $subject,
-                'publicKey' => $vapidPublic,
-                'privateKey' => $vapidPrivate,
-            ],
-        ];
-        $payload = json_encode([
-            'title' => $validated['title'],
-            'body' => $validated['body'],
-        ]);
-        $userIdsSent = [];
-        try {
-            $webPush = new WebPush($auth);
-            foreach ($subscriptions as $sub) {
-                $keys = $sub->keys ?? [];
-                $authKey = trim((string) ($keys['auth'] ?? ''));
-                $p256dh = trim((string) ($keys['p256dh'] ?? ''));
-                if (! $sub->endpoint || ! $authKey || ! $p256dh) {
-                    continue;
-                }
-                $subscription = Subscription::create([
-                    'endpoint' => $sub->endpoint,
-                    'keys' => [
-                        'auth' => $this->normalizeBase64KeyForPush($authKey),
-                        'p256dh' => $this->normalizeBase64KeyForPush($p256dh),
-                    ],
-                ]);
-                $report = $webPush->sendOneNotification($subscription, $payload);
-                if ($report->isSuccess()) {
-                    $sent++;
-                    if ($sub->user_id) {
-                        $userIdsSent[$sub->user_id] = true;
-                    }
-                }
-            }
-            foreach (array_keys($userIdsSent) as $userId) {
-                MemberNotification::create([
-                    'product_id' => $produto->id,
-                    'user_id' => $userId,
-                    'type' => 'push',
-                    'title' => $validated['title'],
-                    'body' => $validated['body'],
-                ]);
-            }
-        } catch (\Throwable $e) {
-            return response()->json(['message' => 'Erro ao enviar: ' . $e->getMessage()], 500);
+        if ($result['sent'] === 0 && str_contains($result['message'], 'VAPID')) {
+            return response()->json(['message' => $result['message']], 400);
         }
-        return response()->json([
-            'success' => true,
-            'sent' => $sent,
-            'message' => $sent === 0
-                ? 'Nenhum destinatário inscrito ou falha no envio.'
-                : "Notificação enviada para {$sent} destinatário(s).",
-        ]);
-    }
 
-    private function normalizeBase64KeyForPush(string $key): string
-    {
-        $key = trim($key);
-        if ($key === '') {
-            return $key;
-        }
-        if (str_contains($key, '+') || str_contains($key, '/')) {
-            return strtr($key, ['+' => '-', '/' => '_']);
-        }
-        return $key;
+        return response()->json([
+            'success' => $result['sent'] > 0,
+            'sent' => $result['sent'],
+            'failed' => $result['failed'],
+            'expired' => $result['expired'],
+            'message' => $result['message'],
+        ]);
     }
 
     private function authorizeProduct(Product $produto): void

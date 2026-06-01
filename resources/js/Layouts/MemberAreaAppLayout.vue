@@ -6,6 +6,7 @@ import MemberAreaNotificationsPanel from '@/components/member-area/MemberAreaNot
 import StudentHubSidebar from '@/components/student/StudentHubSidebar.vue';
 import Button from '@/components/ui/Button.vue';
 import { useBackToPanelLink } from '@/composables/useBackToPanelLink';
+import { useMemberPushSubscribe } from '@/composables/useMemberPushSubscribe';
 import { pickFaviconUrl } from '@/composables/resolveAssetUrl';
 import { Bell, ChevronDown, User, X, Camera, Lock, CheckCircle, AlertCircle, Menu, Trophy, ArrowLeft, LogOut } from 'lucide-vue-next';
 
@@ -319,163 +320,47 @@ const themeColor = computed(() => config.value?.pwa?.theme_color || '#0ea5e9');
 const appName = computed(() => config.value?.pwa?.name || product.value?.name || 'App');
 const pageTitle = computed(() => product.value?.name || config.value?.pwa?.name || 'Área de Membros');
 
-const canRegisterPush = computed(() => Boolean(
-    push_enabled.value &&
-    vapid_public.value &&
-    typeof window !== 'undefined' &&
-    typeof navigator !== 'undefined' &&
-    'serviceWorker' in navigator &&
-    'PushManager' in window
-));
-
-/** Detecta se o app está rodando como PWA instalado (standalone). */
-const isStandalonePwa = computed(() => {
-    if (typeof window === 'undefined') return false;
-    if (window.matchMedia('(display-mode: standalone)').matches) return true;
-    if (window.matchMedia('(display-mode: fullscreen)').matches && window.navigator.standalone === false) return false;
-    return !!window.navigator.standalone;
+const memberPush = useMemberPushSubscribe({
+    pushEnabled: push_enabled,
+    vapidPublic: vapid_public,
+    baseUrl,
+    slug,
 });
 
-const pushSubscribing = ref(false);
-const pushRegistered = ref(false);
+const canRegisterPush = memberPush.canRegisterPush;
+const isStandalonePwa = memberPush.isStandalonePwa;
+const pushSubscribing = memberPush.pushSubscribing;
+const pushRegistered = memberPush.pushRegistered;
 const pushAutoPromptAttempted = ref(false);
 
-/** No PWA instalado usa chave separada para "dispensado", assim o prompt aparece após instalar e logar mesmo se dispensou no browser. */
-const PUSH_PROMPT_DISMISSED_KEY = computed(() => `push_prompt_dismissed_${slug.value || 'default'}${isStandalonePwa.value ? '_standalone' : ''}`);
-
-function shouldAutoPromptPush() {
-    if (!canRegisterPush.value || pushRegistered.value || pushSubscribing.value || pushAutoPromptAttempted.value) return false;
-    if (typeof Notification === 'undefined') return false;
-    if (Notification.permission === 'denied') return false;
-    try {
-        const dismissed = localStorage.getItem(PUSH_PROMPT_DISMISSED_KEY.value);
-        if (dismissed) {
-            const age = Date.now() - parseInt(dismissed, 10);
-            if (age < 24 * 60 * 60 * 1000) return false; // não insistir por 24h se dispensou
-        }
-    } catch (_) {}
-    return true;
-}
-
-function urlBase64ToUint8Array(base64String) {
-    const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
-    const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
-    const rawData = window.atob(base64);
-    const outputArray = new Uint8Array(rawData.length);
-    for (let i = 0; i < rawData.length; ++i) outputArray[i] = rawData.charCodeAt(i);
-    return outputArray;
-}
-
-function serializeSubscription(sub) {
-    const p256dh = sub?.getKey?.('p256dh');
-    const auth = sub?.getKey?.('auth');
-    return {
-        endpoint: sub?.endpoint,
-        keys: {
-            p256dh: p256dh ? btoa(String.fromCharCode.apply(null, new Uint8Array(p256dh))) : '',
-            auth: auth ? btoa(String.fromCharCode.apply(null, new Uint8Array(auth))) : '',
-        },
-    };
-}
-
-async function syncMemberPushSubscription(sub, subscribeUrl, csrf) {
-    const body = serializeSubscription(sub);
-    if (!body.endpoint || !body.keys?.p256dh || !body.keys?.auth) {
-        throw new Error('Subscription inválida para sincronização.');
-    }
-    const res = await fetch(subscribeUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-CSRF-TOKEN': csrf, Accept: 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
-        body: JSON.stringify(body),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok || !data?.success) {
-        throw new Error(data?.message || 'Não foi possível sincronizar a inscrição de notificações.');
-    }
-    return true;
-}
-
-/** Verifica se já existe subscription no browser e atualiza pushRegistered (para o painel de notificações). */
-async function checkExistingSubscriptionForPanel() {
-    if (!canRegisterPush.value || typeof navigator === 'undefined' || !navigator.serviceWorker?.getRegistration) return;
-    const scope = baseUrl.value ? (baseUrl.value.endsWith('/') ? baseUrl.value : baseUrl.value + '/') : null;
-    if (!scope) return;
-    try {
-        const reg = await navigator.serviceWorker.getRegistration(scope);
-        const existing = await reg?.pushManager?.getSubscription?.();
-        if (!existing) return;
-        const subscribeUrl = `${scope}push-subscribe`;
-        const csrf = document.querySelector('meta[name="csrf-token"]')?.content ?? '';
-        await syncMemberPushSubscription(existing, subscribeUrl, csrf);
-        pushRegistered.value = true;
-    } catch (e) {
-        console.warn('MemberArea push sync failed (panel check):', e);
-    }
-}
-
 async function registerPushSubscription() {
-    if (!canRegisterPush.value || pushSubscribing.value) return false;
-    const scope = baseUrl.value.endsWith('/') ? baseUrl.value : baseUrl.value + '/';
-    const swUrl = `${scope}sw.js`;
-    const subscribeUrl = `${scope}push-subscribe`;
-    const csrf = document.querySelector('meta[name="csrf-token"]')?.content ?? '';
-    pushSubscribing.value = true;
     pushAutoPromptAttempted.value = true;
-    try {
-        const reg = await navigator.serviceWorker.register(swUrl, { scope });
-        const existing = await reg.pushManager?.getSubscription?.();
-        const sub = existing || await reg.pushManager.subscribe({
-            userVisibleOnly: true,
-            applicationServerKey: urlBase64ToUint8Array(vapid_public.value),
-        });
-        await syncMemberPushSubscription(sub, subscribeUrl, csrf);
-        pushRegistered.value = true;
-        return true;
-    } catch (e) {
-        if (e.name === 'NotAllowedError') {
-            try {
-                localStorage.setItem(PUSH_PROMPT_DISMISSED_KEY.value, Date.now().toString());
-            } catch (_) {}
-            return false;
-        }
-        console.error('Push subscribe error', e);
-        alert(e?.message || 'Não foi possível ativar as notificações. Verifique as permissões do navegador.');
-        return false;
-    } finally {
-        pushSubscribing.value = false;
+    const ok = await memberPush.registerAndSubscribe();
+    if (!ok && memberPush.lastPushError.value === 'notification_permission_denied') {
+        memberPush.markAutoPromptDismissed();
     }
+    return ok;
+}
+
+async function checkExistingSubscriptionForPanel() {
+    return memberPush.checkExistingSubscription();
 }
 
 onMounted(() => {
     if (pageTitle.value) document.title = pageTitle.value;
-    const scope = baseUrl.value ? (baseUrl.value.endsWith('/') ? baseUrl.value : baseUrl.value + '/') : null;
-    // No PWA instalado (standalone), delay maior para o prompt aparecer depois de logar e ver a tela
     const promptDelayMs = isStandalonePwa.value ? 3000 : 1500;
     function schedulePushPrompt() {
-        if (!shouldAutoPromptPush()) return;
-        setTimeout(() => {
-            if (shouldAutoPromptPush()) registerPushSubscription();
+        if (!memberPush.shouldAutoPromptPush() || pushAutoPromptAttempted.value) return;
+        setTimeout(async () => {
+            if (!memberPush.shouldAutoPromptPush() || pushAutoPromptAttempted.value) return;
+            await registerPushSubscription();
         }, promptDelayMs);
     }
-    if (scope && typeof navigator !== 'undefined' && navigator.serviceWorker) {
-        navigator.serviceWorker.register(`${scope}sw.js`, { scope }).then(async (reg) => {
-            if (reg.pushManager && canRegisterPush.value) {
-                try {
-                    const existing = await reg.pushManager.getSubscription();
-                    if (existing) {
-                        const subscribeUrl = `${scope}push-subscribe`;
-                        const csrf = document.querySelector('meta[name="csrf-token"]')?.content ?? '';
-                        await syncMemberPushSubscription(existing, subscribeUrl, csrf);
-                        pushRegistered.value = true;
-                        return;
-                    }
-                } catch (e) {
-                    console.warn('MemberArea push sync failed (onMounted):', e);
-                }
+    if (baseUrl.value && typeof navigator !== 'undefined' && navigator.serviceWorker) {
+        memberPush.checkExistingSubscription().finally(() => {
+            if (!memberPush.shouldShowNotificationBanner()) {
+                schedulePushPrompt();
             }
-            schedulePushPrompt();
-        }).catch(() => {
-            schedulePushPrompt();
         });
     }
 });
@@ -661,7 +546,16 @@ watch(
             </div>
         </Teleport>
 
-        <PwaInstallPrompt v-if="slug" :app-name="appName" :slug="slug" />
+        <PwaInstallPrompt
+            v-if="slug"
+            :app-name="appName"
+            :slug="slug"
+            :push-enabled="canRegisterPush"
+            :push-registered="pushRegistered"
+            :register-push="(opts) => memberPush.registerAndSubscribe(opts)"
+            :should-show-notification-banner="memberPush.shouldShowNotificationBanner"
+            :dismiss-notification-banner="memberPush.dismissNotificationBanner"
+        />
         <MemberAreaNotificationsPanel
             :open="notificationsPanelOpen"
             :base-path="notificationsApiBasePath"

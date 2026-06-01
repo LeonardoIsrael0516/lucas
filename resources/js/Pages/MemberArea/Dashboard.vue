@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, onUnmounted, ref } from 'vue';
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { router, usePage } from '@inertiajs/vue3';
 import StudentAreaDocumentHead from '@/components/student/StudentAreaDocumentHead.vue';
 import StudentHubSidebar from '@/components/student/StudentHubSidebar.vue';
@@ -7,6 +7,7 @@ import StudentHubContinueCard from '@/components/student/StudentHubContinueCard.
 import StudentHubOwnedCourseCard from '@/components/student/StudentHubOwnedCourseCard.vue';
 import StudentHubUpsellCourseCard from '@/components/student/StudentHubUpsellCourseCard.vue';
 import StudentAreaBackToPanelLink from '@/components/student/StudentAreaBackToPanelLink.vue';
+import StudentHubAccountMenu from '@/components/student/StudentHubAccountMenu.vue';
 import RefundRequestModal from '@/components/member-area/RefundRequestModal.vue';
 import { Bell, Search } from 'lucide-vue-next';
 
@@ -86,8 +87,30 @@ function handleCourseMenuClickOutside(event) {
 }
 
 const searchLocal = ref(props.search_query || '');
+const searchDebounceMs = 400;
+let searchDebounceTimer = null;
+let searchReady = false;
+
+watch(
+    () => props.search_query,
+    (q) => {
+        const next = q || '';
+        if (searchLocal.value !== next) {
+            searchLocal.value = next;
+        }
+    },
+);
+
 const hasUnread = computed(() => (props.notifications_unread_count || 0) > 0);
 const sidebarCollapsed = ref(false);
+
+const searchOnly = [
+    'search_query',
+    'my_courses',
+    'continue_items',
+    'recommended_courses',
+    'other_courses',
+];
 
 /** Área hub: sempre tema claro; restaura classe `dark` do html ao sair se o aluno tinha escuro antes. */
 const hadDarkHtmlOnMount = ref(false);
@@ -96,6 +119,7 @@ onMounted(() => {
     hadDarkHtmlOnMount.value = document.documentElement.classList.contains('dark');
     document.documentElement.classList.remove('dark');
     document.addEventListener('click', handleCourseMenuClickOutside);
+    searchReady = true;
 });
 
 onUnmounted(() => {
@@ -103,12 +127,49 @@ onUnmounted(() => {
     if (hadDarkHtmlOnMount.value) {
         document.documentElement.classList.add('dark');
     }
+    if (searchDebounceTimer) {
+        clearTimeout(searchDebounceTimer);
+    }
 });
+
+function runSearch() {
+    const term = searchLocal.value.trim();
+    const current = String(props.search_query || '').trim();
+    if (term === current) {
+        return;
+    }
+    router.get(
+        '/area-membros',
+        term ? { q: term } : {},
+        {
+            preserveScroll: true,
+            replace: true,
+            only: searchOnly,
+        },
+    );
+}
+
+function scheduleSearch() {
+    if (!searchReady) {
+        return;
+    }
+    if (searchDebounceTimer) {
+        clearTimeout(searchDebounceTimer);
+    }
+    searchDebounceTimer = setTimeout(runSearch, searchDebounceMs);
+}
 
 function submitSearch(e) {
     e.preventDefault();
-    router.get('/area-membros', { q: searchLocal.value.trim() || undefined }, { preserveState: true, preserveScroll: true, replace: true });
+    if (searchDebounceTimer) {
+        clearTimeout(searchDebounceTimer);
+    }
+    runSearch();
 }
+
+watch(searchLocal, () => {
+    scheduleSearch();
+});
 
 </script>
 
@@ -142,6 +203,7 @@ function submitSearch(e) {
                                 v-model="searchLocal"
                                 type="search"
                                 name="q"
+                                autocomplete="off"
                                 placeholder="O que você está procurando?"
                                 class="w-full rounded-full border border-zinc-200 bg-white py-2 pl-10 pr-4 text-sm text-zinc-900 placeholder:text-zinc-400 focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500"
                             />
@@ -153,12 +215,7 @@ function submitSearch(e) {
                             <Bell class="h-5 w-5" />
                             <span v-if="hasUnread" class="absolute right-1 top-1 h-2 w-2 rounded-full bg-red-500 ring-2 ring-white" />
                         </span>
-                        <div class="hidden items-center gap-2 sm:flex">
-                            <div class="flex h-9 w-9 items-center justify-center rounded-full text-xs font-semibold text-white" :style="{ backgroundColor: 'var(--student-primary)' }">
-                                {{ auth_user.initials }}
-                            </div>
-                            <span class="max-w-[10rem] truncate text-sm font-medium text-zinc-800">{{ auth_user.name }}</span>
-                        </div>
+                        <StudentHubAccountMenu :user="auth_user" :profile-href="profile_href" />
                     </div>
                 </div>
             </header>
