@@ -520,7 +520,18 @@ class MemberAreaAppController extends Controller
             abort(404);
         }
 
-        $remote = Http::timeout(120)->connectTimeout(30)->get($source);
+        $httpHeaders = [];
+        $range = $request->header('Range');
+        if (is_string($range) && $range !== '') {
+            $httpHeaders['Range'] = $range;
+        }
+
+        $remote = Http::timeout(120)
+            ->connectTimeout(30)
+            ->withHeaders($httpHeaders)
+            ->withOptions(['stream' => true])
+            ->get($source);
+
         if (! $remote->successful()) {
             abort(502, 'Não foi possível obter o arquivo.');
         }
@@ -532,13 +543,29 @@ class MemberAreaAppController extends Controller
         }
         $disposition = ($download ? 'attachment' : 'inline').'; filename="'.$fallbackName.'"';
 
-        return response($remote->body(), 200, [
-            'Content-Type' => 'application/pdf',
+        $responseHeaders = [
+            'Content-Type' => $remote->header('Content-Type') ?: 'application/pdf',
             'Content-Disposition' => $disposition,
             'Accept-Ranges' => 'bytes',
             'Cache-Control' => 'private, max-age=86400',
             'X-Content-Type-Options' => 'nosniff',
-        ]);
+            'X-Accel-Buffering' => 'no',
+        ];
+        if ($remote->header('Content-Length')) {
+            $responseHeaders['Content-Length'] = $remote->header('Content-Length');
+        }
+        if ($remote->header('Content-Range')) {
+            $responseHeaders['Content-Range'] = $remote->header('Content-Range');
+        }
+
+        $status = $remote->status();
+
+        return response()->stream(function () use ($remote): void {
+            $body = $remote->toPsrResponse()->getBody();
+            while (! $body->eof()) {
+                echo $body->read(65536);
+            }
+        }, $status, $responseHeaders);
     }
 
     /**

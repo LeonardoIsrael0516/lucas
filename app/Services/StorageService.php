@@ -6,6 +6,8 @@ use App\Models\Setting;
 use Illuminate\Contracts\Filesystem\Filesystem;
 use Illuminate\Http\Request;
 use Illuminate\Http\UploadedFile;
+use Aws\S3\S3Client;
+use Illuminate\Filesystem\AwsS3V3Adapter;
 use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\Storage;
 use Symfony\Component\HttpFoundation\StreamedResponse;
@@ -245,7 +247,7 @@ class StorageService
 
         $pathPart = parse_url($stored, PHP_URL_PATH);
         if (is_string($pathPart) && $pathPart !== '') {
-            $candidate = ltrim($pathPart, '/');
+            $candidate = ltrim(rawurldecode($pathPart), '/');
             if ($candidate !== '' && $this->exists($candidate)) {
                 return $candidate;
             }
@@ -280,7 +282,7 @@ class StorageService
             return $this->streamLocalPdfWithRange($request, $relativePath, $baseHeaders);
         }
 
-        return $this->streamRemotePdf($relativePath, $baseHeaders);
+        return $this->streamRemotePdfWithRange($request, $relativePath, $baseHeaders);
     }
 
     private function sanitizePdfFilename(string $filename, string $relativePath): string
@@ -359,13 +361,192 @@ class StorageService
     }
 
     /**
+     * PDF no R2/S3 com suporte a Range (obrigatório para pdf.js).
+     *
      * @param  array<string, string>  $headers
      */
-    private function streamRemotePdf(string $relativePath, array $headers): StreamedResponse
+    private function streamRemotePdfWithRange(Request $request, string $relativePath, array $headers): StreamedResponse
     {
         $disk = $this->disk();
-        $size = $disk->size($relativePath);
+        try {
+            $size = (int) $disk->size($relativePath);
+        } catch (\Throwable) {
+            abort(404);
+        }
+        if ($size <= 0) {
+            abort(404);
+        }
 
+        $rangeHeader = $request->header('Range');
+        $range = $this->parseByteRange(is_string($rangeHeader) ? $rangeHeader : null, $size);
+        if (is_string($rangeHeader) && preg_match('/^bytes=/i', $rangeHeader) && $range === null) {
+            return response()->stream(fn () => null, 416, $headers + [
+                'Content-Range' => "bytes */{$size}",
+            ]);
+        }
+
+        $s3 = $this->s3ObjectTarget($relativePath);
+
+        if ($s3 !== null) {
+            if ($range !== null) {
+                return $this->streamS3ObjectRange($s3, $range, $size, $headers);
+            }
+
+            return $this->streamS3ObjectFull($s3, $size, $headers);
+        }
+
+        if ($range !== null) {
+            return $this->streamFlysystemRange($disk, $relativePath, $range, $size, $headers);
+        }
+
+        return $this->streamFlysystemFull($disk, $relativePath, $size, $headers);
+    }
+
+    /**
+     * @return array{start: int, end: int}|null
+     */
+    private function parseByteRange(?string $rangeHeader, int $size): ?array
+    {
+        if (! is_string($rangeHeader) || ! preg_match('/bytes=(\d*)-(\d*)/', $rangeHeader, $m)) {
+            return null;
+        }
+        $start = $m[1] !== '' ? (int) $m[1] : 0;
+        $end = $m[2] !== '' ? (int) $m[2] : $size - 1;
+        $end = min($end, $size - 1);
+        if ($start > $end || $start >= $size) {
+            return null;
+        }
+
+        return ['start' => $start, 'end' => $end];
+    }
+
+    /**
+     * @return array{client: S3Client, bucket: string, key: string}|null
+     */
+    private function s3ObjectTarget(string $relativePath): ?array
+    {
+        if ($this->isLocal) {
+            return null;
+        }
+        $disk = $this->disk();
+        if (! $disk instanceof AwsS3V3Adapter) {
+            return null;
+        }
+        $config = $disk->getConfig();
+        $bucket = (string) ($config['bucket'] ?? '');
+        if ($bucket === '') {
+            return null;
+        }
+        $key = ltrim(str_replace('\\', '/', $relativePath), '/');
+        $root = (string) ($config['root'] ?? '');
+        if ($root !== '') {
+            $key = trim($root, '/').'/'.$key;
+        }
+
+        return [
+            'client' => $disk->getClient(),
+            'bucket' => $bucket,
+            'key' => $key,
+        ];
+    }
+
+    /**
+     * @param  array{client: S3Client, bucket: string, key: string}  $s3
+     * @param  array{start: int, end: int}  $range
+     * @param  array<string, string>  $headers
+     */
+    private function streamS3ObjectRange(array $s3, array $range, int $size, array $headers): StreamedResponse
+    {
+        $start = $range['start'];
+        $end = $range['end'];
+        $length = $end - $start + 1;
+
+        try {
+            $result = $s3['client']->getObject([
+                'Bucket' => $s3['bucket'],
+                'Key' => $s3['key'],
+                'Range' => "bytes={$start}-{$end}",
+            ]);
+        } catch (\Throwable) {
+            abort(502, 'Não foi possível ler o arquivo.');
+        }
+
+        return response()->stream(function () use ($result): void {
+            $body = $result['Body'];
+            while (! $body->eof()) {
+                echo $body->read(65536);
+            }
+        }, 206, $headers + [
+            'Content-Length' => (string) $length,
+            'Content-Range' => "bytes {$start}-{$end}/{$size}",
+            'X-Accel-Buffering' => 'no',
+        ]);
+    }
+
+    /**
+     * @param  array{client: S3Client, bucket: string, key: string}  $s3
+     * @param  array<string, string>  $headers
+     */
+    private function streamS3ObjectFull(array $s3, int $size, array $headers): StreamedResponse
+    {
+        try {
+            $result = $s3['client']->getObject([
+                'Bucket' => $s3['bucket'],
+                'Key' => $s3['key'],
+            ]);
+        } catch (\Throwable) {
+            abort(502, 'Não foi possível ler o arquivo.');
+        }
+
+        return response()->stream(function () use ($result): void {
+            $body = $result['Body'];
+            while (! $body->eof()) {
+                echo $body->read(65536);
+            }
+        }, 200, $headers + [
+            'Content-Length' => (string) $size,
+            'X-Accel-Buffering' => 'no',
+        ]);
+    }
+
+    /**
+     * @param  array{start: int, end: int}  $range
+     * @param  array<string, string>  $headers
+     */
+    private function streamFlysystemRange(Filesystem $disk, string $relativePath, array $range, int $size, array $headers): StreamedResponse
+    {
+        $start = $range['start'];
+        $end = $range['end'];
+        $length = $end - $start + 1;
+
+        return response()->stream(function () use ($disk, $relativePath, $start, $length): void {
+            $stream = $disk->readStream($relativePath);
+            if (! is_resource($stream)) {
+                return;
+            }
+            fseek($stream, $start);
+            $remaining = $length;
+            while ($remaining > 0 && ! feof($stream)) {
+                $chunk = fread($stream, min(65536, $remaining));
+                if ($chunk === false) {
+                    break;
+                }
+                echo $chunk;
+                $remaining -= strlen($chunk);
+            }
+            fclose($stream);
+        }, 206, $headers + [
+            'Content-Length' => (string) $length,
+            'Content-Range' => "bytes {$start}-{$end}/{$size}",
+            'X-Accel-Buffering' => 'no',
+        ]);
+    }
+
+    /**
+     * @param  array<string, string>  $headers
+     */
+    private function streamFlysystemFull(Filesystem $disk, string $relativePath, int $size, array $headers): StreamedResponse
+    {
         return response()->stream(function () use ($disk, $relativePath): void {
             $stream = $disk->readStream($relativePath);
             if (! is_resource($stream)) {
@@ -377,7 +558,18 @@ class StorageService
             }
         }, 200, $headers + [
             'Content-Length' => (string) $size,
+            'X-Accel-Buffering' => 'no',
         ]);
+    }
+
+    /**
+     * @param  array<string, string>  $headers
+     */
+    private function streamRemotePdf(string $relativePath, array $headers): StreamedResponse
+    {
+        $request = request();
+
+        return $this->streamRemotePdfWithRange($request, $relativePath, $headers);
     }
 
     /**
