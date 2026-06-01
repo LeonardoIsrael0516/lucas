@@ -103,6 +103,11 @@ let fullscreenNavTimer = null;
 /** Aula PDF em viewport estreita (< 768px): faixa horizontal, pinça e scroll */
 const isLessonMobile = computed(() => isLessonVariant.value && !isDesktopViewport.value);
 
+/** Aula no desktop, fora de tela cheia (layout de scroll próprio) */
+const isLessonDesktopViewer = computed(
+    () => isLessonVariant.value && isDesktopViewport.value && !isFullscreen.value
+);
+
 /** Segmentos tipo Stories no topo; acima disso usamos barra única + texto */
 const PDF_STORY_STYLE_MAX_PAGES = 30;
 
@@ -216,6 +221,16 @@ async function saveFileIndexAnnotations(fi) {
     }
 }
 
+function hostContentBox(host) {
+    const s = getComputedStyle(host);
+    const padX = parseFloat(s.paddingLeft) + parseFloat(s.paddingRight);
+    const padY = parseFloat(s.paddingTop) + parseFloat(s.paddingBottom);
+    return {
+        w: Math.max(80, host.clientWidth - padX),
+        h: Math.max(80, host.clientHeight - padY),
+    };
+}
+
 async function renderCurrentPage() {
     const canvas = canvasRef.value;
     const host = canvasHostRef.value;
@@ -227,8 +242,7 @@ async function renderCurrentPage() {
     const page = await doc.getPage(pageNum);
     const outputScale = window.devicePixelRatio || 1;
     const baseViewport = page.getViewport({ scale: 1 });
-    const cw = Math.max(80, host.clientWidth - 16);
-    const ch = Math.max(80, host.clientHeight - 16);
+    const { w: cw, h: ch } = hostContentBox(host);
     const fitWhole = Math.min(cw / baseViewport.width, ch / baseViewport.height, 8);
     const fitWidth = Math.min(cw / baseViewport.width, 8);
     let fit;
@@ -262,6 +276,10 @@ async function renderCurrentPage() {
     }
     renderTask = null;
     void renderNextPeek();
+    await nextTick();
+    if (isLessonDesktopViewer.value) {
+        ensureCanvasVisibleAtTop();
+    }
 }
 
 async function renderNextPeek() {
@@ -380,10 +398,16 @@ async function renderVisibleThumbs() {
 }
 
 function resetCanvasHostScroll() {
+    ensureCanvasVisibleAtTop();
+}
+
+/** Scroll do host: topo sempre visível; horizontal centrado quando há overflow */
+function ensureCanvasVisibleAtTop() {
     const host = canvasHostRef.value;
     if (!host) return;
     host.scrollTop = 0;
-    host.scrollLeft = 0;
+    const overflowX = host.scrollWidth - host.clientWidth;
+    host.scrollLeft = overflowX > 2 ? Math.floor(overflowX / 2) : 0;
 }
 
 function prevPage() {
@@ -400,10 +424,18 @@ function nextPage() {
 
 function zoomIn() {
     zoomMul.value = Math.min(3, Math.round((zoomMul.value + 0.25) * 100) / 100);
+    nextTick(() => resetCanvasHostScrollAfterZoom());
 }
 
 function zoomOut() {
     zoomMul.value = Math.max(0.5, Math.round((zoomMul.value - 0.25) * 100) / 100);
+    nextTick(() => resetCanvasHostScrollAfterZoom());
+}
+
+/** Após zoom por botões no desktop (aula, fora de tela cheia), ancora no topo da página */
+function resetCanvasHostScrollAfterZoom() {
+    if (!isLessonVariant.value || isLessonMobile.value || isFullscreen.value) return;
+    resetCanvasHostScroll();
 }
 
 async function toggleFullscreen() {
@@ -896,9 +928,10 @@ watch(globalPage, async (newP, oldP) => {
     }
 });
 
-watch(zoomMul, () => {
+watch(zoomMul, async () => {
     if (pinchZoomBypassWatch) return;
-    void renderCurrentPage();
+    await renderCurrentPage();
+    resetCanvasHostScrollAfterZoom();
     void nextTick(() => bindLessonTouchGestures());
 });
 
@@ -983,7 +1016,8 @@ const showFullscreenPageNav = computed(
 
 /** Host do PDF no modo aula: no mobile/tela cheia, scroll + gestos touch */
 const pdfCanvasHostClasses = computed(() => {
-    const shell = 'relative min-h-0 min-w-0 flex-1 overflow-auto';
+    /** h-0 + flex-1: força altura limitada pelo pai para overflow-auto funcionar */
+    const shell = 'relative h-0 min-h-0 min-w-0 flex-1 overflow-auto';
     if (!isLessonVariant.value) {
         return `${shell} flex aspect-video items-start justify-center bg-zinc-950/80 p-3`;
     }
@@ -999,12 +1033,33 @@ const pdfCanvasHostClasses = computed(() => {
         }
         return classes;
     }
-    return [shell, 'flex items-center justify-center bg-[var(--lesson-pdf-bg)]', isFullscreen.value ? 'p-3' : 'p-4 sm:p-6'];
+    return [
+        shell,
+        'pdf-lesson-desktop-scroll-host bg-[var(--lesson-pdf-bg)]',
+        isFullscreen.value ? 'p-3' : 'p-4 sm:p-6',
+    ];
 });
 
 const lessonMobileScrollInner = computed(
     () => isLessonVariant.value && (isLessonMobile.value || isFullscreen.value)
 );
+
+const lessonScrollShellClass = computed(() => {
+    if (isLessonDesktopViewer.value) {
+        return zoomMul.value <= 1.01
+            ? 'pdf-lesson-scroll-content pdf-lesson-scroll-content--fit'
+            : 'pdf-lesson-scroll-content pdf-lesson-scroll-content--zoomed';
+    }
+    if (lessonMobileScrollInner.value) return '';
+    return 'relative mx-auto';
+});
+
+const lessonCanvasWrapClass = computed(() => {
+    if (!isLessonVariant.value) return 'relative inline-block';
+    if (isLessonDesktopViewer.value) return 'relative pdf-lesson-canvas-wrap';
+    if (lessonMobileScrollInner.value) return 'relative pdf-lesson-mobile-inner';
+    return 'relative inline-block';
+});
 
 watch(isDesktopViewport, (isDesktop) => {
     if (!isDesktop) {
@@ -1245,10 +1300,8 @@ watch([isLessonVariant, loading, error], () => {
                             Página {{ globalPage }} / {{ totalPages }}
                         </div>
 
-                        <div
-                            class="relative mx-auto"
-                            :class="lessonMobileScrollInner ? 'pdf-lesson-mobile-inner' : 'inline-block'"
-                        >
+                        <div :class="lessonScrollShellClass">
+                            <div :class="lessonCanvasWrapClass">
                             <canvas
                                 ref="canvasRef"
                                 :class="isLessonVariant ? 'pdf-lesson-main-canvas block shadow-lg' : 'max-w-full shadow-lg'"
@@ -1285,6 +1338,7 @@ watch([isLessonVariant, loading, error], () => {
                                     class="pointer-events-none absolute border-2 border-dashed border-amber-300 bg-amber-400/20"
                                     :style="selectionRectCss"
                                 />
+                            </div>
                             </div>
                         </div>
 
@@ -1443,6 +1497,36 @@ watch([isLessonVariant, loading, error], () => {
 .pdf-lesson-thumbs-desktop canvas {
     max-width: 100%;
     height: auto;
+}
+
+/* Aula desktop (fora de tela cheia): scroll em bloco — flex no host cortava o topo com zoom */
+.pdf-lesson-desktop-scroll-host {
+    display: block;
+    text-align: center;
+    -webkit-overflow-scrolling: touch;
+}
+
+.pdf-lesson-scroll-content--fit {
+    box-sizing: border-box;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100%;
+    width: 100%;
+}
+
+.pdf-lesson-scroll-content--zoomed {
+    box-sizing: border-box;
+    display: block;
+    width: 100%;
+    text-align: center;
+}
+
+.pdf-lesson-canvas-wrap {
+    display: inline-block;
+    max-width: none;
+    text-align: left;
+    vertical-align: top;
 }
 
 /* Aula mobile / tela cheia: pinça no JS; pan com 1 dedo quando zoom > 100% */
