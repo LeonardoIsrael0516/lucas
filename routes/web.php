@@ -344,6 +344,14 @@ Route::middleware(['auth', 'admin.tenant', 'role:admin|infoprodutor|team', 'audi
         Route::post('/produtos/{produto}/member-builder/config', [\App\Http\Controllers\MemberBuilderController::class, 'updateConfig'])->name('member-builder.config.update.post');
         Route::post('/produtos/{produto}/member-builder/upload', [\App\Http\Controllers\MemberBuilderController::class, 'uploadImage'])->name('member-builder.upload');
         Route::post('/produtos/{produto}/member-builder/upload-pdf', [\App\Http\Controllers\MemberBuilderController::class, 'uploadPdf'])->name('member-builder.upload-pdf');
+        Route::post('/produtos/{produto}/member-builder/upload-attachment', [\App\Http\Controllers\MemberBuilderController::class, 'uploadAttachment'])->name('member-builder.upload-attachment');
+        Route::get('/produtos/{produto}/member-builder/pdf-library', [\App\Http\Controllers\MemberPdfLibraryController::class, 'index'])->name('member-builder.pdf-library.index');
+        Route::post('/produtos/{produto}/member-builder/pdf-library', [\App\Http\Controllers\MemberPdfLibraryController::class, 'store'])->name('member-builder.pdf-library.store');
+        Route::post('/produtos/{produto}/member-builder/pdf-library/folders', [\App\Http\Controllers\MemberPdfLibraryController::class, 'storeFolder'])->name('member-builder.pdf-library.folders.store');
+        Route::patch('/produtos/{produto}/member-builder/pdf-library/folders/{folder}', [\App\Http\Controllers\MemberPdfLibraryController::class, 'updateFolder'])->name('member-builder.pdf-library.folders.update');
+        Route::delete('/produtos/{produto}/member-builder/pdf-library/folders/{folder}', [\App\Http\Controllers\MemberPdfLibraryController::class, 'destroyFolder'])->name('member-builder.pdf-library.folders.destroy');
+        Route::patch('/produtos/{produto}/member-builder/pdf-library/{item}/move', [\App\Http\Controllers\MemberPdfLibraryController::class, 'moveItem'])->name('member-builder.pdf-library.move');
+        Route::delete('/produtos/{produto}/member-builder/pdf-library/{item}', [\App\Http\Controllers\MemberPdfLibraryController::class, 'destroy'])->name('member-builder.pdf-library.destroy');
         Route::post('/produtos/{produto}/member-builder/upload-badge', [\App\Http\Controllers\MemberBuilderController::class, 'uploadBadge'])->name('member-builder.upload-badge');
         Route::post('/produtos/{produto}/member-builder/sections', [\App\Http\Controllers\MemberBuilderController::class, 'storeSection'])->name('member-builder.sections.store');
         Route::put('/produtos/{produto}/member-builder/sections/{section}', [\App\Http\Controllers\MemberBuilderController::class, 'updateSection'])->name('member-builder.sections.update');
@@ -355,6 +363,7 @@ Route::middleware(['auth', 'admin.tenant', 'role:admin|infoprodutor|team', 'audi
         Route::post('/produtos/{produto}/member-builder/modules/{module}/lessons', [\App\Http\Controllers\MemberBuilderController::class, 'storeLesson'])->name('member-builder.lessons.store');
         Route::put('/produtos/{produto}/member-builder/lessons/{lesson}', [\App\Http\Controllers\MemberBuilderController::class, 'updateLesson'])->name('member-builder.lessons.update');
         Route::post('/produtos/{produto}/member-builder/lessons/{lesson}/duplicate', [\App\Http\Controllers\MemberBuilderController::class, 'duplicateLesson'])->name('member-builder.lessons.duplicate');
+        Route::post('/produtos/{produto}/member-builder/lessons/{lesson}/apply-template', [\App\Http\Controllers\MemberBuilderController::class, 'applyLessonTemplate'])->name('member-builder.lessons.apply-template');
         Route::delete('/produtos/{produto}/member-builder/lessons/{lesson}', [\App\Http\Controllers\MemberBuilderController::class, 'destroyLesson'])->name('member-builder.lessons.destroy');
         Route::post('/produtos/{produto}/member-builder/internal-products', [\App\Http\Controllers\MemberBuilderController::class, 'storeInternalProduct'])->name('member-builder.internal-products.store');
         Route::delete('/produtos/{produto}/member-builder/internal-products/{internalProduct}', [\App\Http\Controllers\MemberBuilderController::class, 'destroyInternalProduct'])->name('member-builder.internal-products.destroy');
@@ -523,6 +532,7 @@ Route::middleware(['auth', 'role:aluno|admin'])->group(function () {
     Route::get('/area-membros/certificados', [\App\Http\Controllers\StudentAreaHubController::class, 'certificados'])->name('student-hub.certificados');
     Route::get('/area-membros/certificados/{product}', [\App\Http\Controllers\StudentAreaHubController::class, 'certificadoShow'])->name('student-hub.certificado.show');
     Route::get('/area-membros/conquistas', [\App\Http\Controllers\StudentAreaHubController::class, 'conquistas'])->name('student-hub.conquistas');
+    Route::get('/area-membros/salvos', [\App\Http\Controllers\StudentAreaHubController::class, 'savedLessons'])->name('student-hub.saved');
     Route::get('/suporte', [\App\Http\Controllers\StudentSupportController::class, 'index'])->name('student-support.index');
     Route::post('/suporte', [\App\Http\Controllers\StudentSupportController::class, 'store'])->name('student-support.store');
     Route::get('/suporte/{ticket}', [\App\Http\Controllers\StudentSupportController::class, 'show'])->name('student-support.show');
@@ -562,9 +572,14 @@ Route::prefix('m/{slug}')->where(['slug' => '[a-zA-Z0-9\-]{3,64}'])->middleware(
         Route::get('aula/{lesson}/pdf/{fileIndex}', [\App\Http\Controllers\MemberAreaAppController::class, 'presentationPdf'])
             ->whereNumber('fileIndex')
             ->name('member-area-app.lesson.pdf');
+        Route::get('aula/{lesson}/attachment/{fileIndex}', [\App\Http\Controllers\MemberAreaAppController::class, 'lessonAttachment'])
+            ->whereNumber('fileIndex')
+            ->name('member-area-app.lesson.attachment');
         Route::get('aula/{lesson}/pdf-annotations', [\App\Http\Controllers\MemberAreaAppController::class, 'getLessonPdfAnnotations'])->name('member-area-app.lesson.pdf-annotations');
         Route::put('aula/{lesson}/pdf-annotations', [\App\Http\Controllers\MemberAreaAppController::class, 'putLessonPdfAnnotations'])->middleware('throttle:120,1')->name('member-area-app.lesson.pdf-annotations.put');
         Route::post('aula/{lesson}/like', [\App\Http\Controllers\MemberAreaAppController::class, 'toggleLessonLike'])->middleware('throttle:60,1')->name('member-area-app.lesson.like');
+        Route::put('aula/{lesson}/rating', [\App\Http\Controllers\MemberAreaAppController::class, 'updateLessonRating'])->middleware('throttle:60,1')->name('member-area-app.lesson.rating');
+        Route::post('aula/{lesson}/bookmark', [\App\Http\Controllers\MemberAreaAppController::class, 'toggleLessonBookmark'])->middleware('throttle:60,1')->name('member-area-app.lesson.bookmark');
         Route::post('aula/{lesson}/complete', [\App\Http\Controllers\MemberAreaAppController::class, 'completeLesson'])->name('member-area-app.lesson.complete');
         Route::post('aula/{lesson}/comments', [\App\Http\Controllers\MemberAreaAppController::class, 'storeLessonComment'])->name('member-area-app.lesson.comments.store');
         Route::get('comunidade', [\App\Http\Controllers\MemberAreaAppController::class, 'comunidade'])->name('member-area-app.comunidade');
@@ -614,6 +629,8 @@ Route::middleware(['web', 'member.area.resolve.by.host'])->group(function () {
         Route::get('aula/{lesson}/pdf-annotations', [\App\Http\Controllers\MemberAreaAppController::class, 'getLessonPdfAnnotations'])->name('member-area-app.lesson.pdf-annotations.host');
         Route::put('aula/{lesson}/pdf-annotations', [\App\Http\Controllers\MemberAreaAppController::class, 'putLessonPdfAnnotations'])->middleware('throttle:120,1')->name('member-area-app.lesson.pdf-annotations.put.host');
         Route::post('aula/{lesson}/like', [\App\Http\Controllers\MemberAreaAppController::class, 'toggleLessonLike'])->middleware('throttle:60,1')->name('member-area-app.lesson.like.host');
+        Route::put('aula/{lesson}/rating', [\App\Http\Controllers\MemberAreaAppController::class, 'updateLessonRating'])->middleware('throttle:60,1')->name('member-area-app.lesson.rating.host');
+        Route::post('aula/{lesson}/bookmark', [\App\Http\Controllers\MemberAreaAppController::class, 'toggleLessonBookmark'])->middleware('throttle:60,1')->name('member-area-app.lesson.bookmark.host');
         Route::post('aula/{lesson}/complete', [\App\Http\Controllers\MemberAreaAppController::class, 'completeLesson'])->name('member-area-app.lesson.complete.host');
         Route::post('aula/{lesson}/comments', [\App\Http\Controllers\MemberAreaAppController::class, 'storeLessonComment'])->name('member-area-app.lesson.comments.store.host');
         Route::get('comunidade', [\App\Http\Controllers\MemberAreaAppController::class, 'comunidade'])->name('member-area-app.comunidade.host');

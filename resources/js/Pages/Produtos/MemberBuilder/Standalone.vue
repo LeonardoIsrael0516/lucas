@@ -2,6 +2,9 @@
 import { ref, computed, reactive, nextTick, onMounted, watch } from 'vue';
 import axios from 'axios';
 import MemberBuilderPreview from '@/components/member-builder/MemberBuilderPreview.vue';
+import PdfLibraryModal from '@/components/member-builder/PdfLibraryModal.vue';
+import MemberBuilderModulosTab from '@/components/member-builder/MemberBuilderModulosTab.vue';
+import LessonApplyTemplateModal from '@/components/member-builder/LessonApplyTemplateModal.vue';
 import Button from '@/components/ui/Button.vue';
 import Toggle from '@/components/ui/Toggle.vue';
 import {
@@ -29,6 +32,7 @@ import {
     BookOpen,
     Trophy,
     BarChart3,
+    Star,
     Presentation,
     Copy,
     Sparkles,
@@ -71,7 +75,7 @@ const props = defineProps({
     /** Limites exibidos e usados nas mensagens (valores reais vêm do backend / .env). */
     upload_limits: {
         type: Object,
-        default: () => ({ image_max_mb: 10, badge_max_mb: 5, pdf_max_mb: 50 }),
+        default: () => ({ image_max_mb: 10, badge_max_mb: 5, pdf_max_mb: 50, attachment_max_mb: 50 }),
     },
 });
 
@@ -79,6 +83,7 @@ const uploadLimits = computed(() => ({
     image_max_mb: props.upload_limits?.image_max_mb ?? 10,
     badge_max_mb: props.upload_limits?.badge_max_mb ?? 5,
     pdf_max_mb: props.upload_limits?.pdf_max_mb ?? 50,
+    attachment_max_mb: props.upload_limits?.attachment_max_mb ?? 50,
 }));
 
 function memberBuilderImageUploadError(e, fallbackLabel = 'imagem') {
@@ -127,7 +132,12 @@ async function sendPushNotification() {
 
 const base = computed(() => `/produtos/${props.produto.id}/member-builder`);
 const uploadUrl = computed(() => `${window.location.origin}${base.value}/upload`);
+const uploadAttachmentUrl = computed(() => `${window.location.origin}${base.value}/upload-attachment`);
 const uploadPdfUrl = computed(() => `${window.location.origin}${base.value}/upload-pdf`);
+const pdfLibraryIndexUrl = computed(() => `${window.location.origin}${base.value}/pdf-library`);
+const pdfLibraryUploadUrl = computed(() => `${window.location.origin}${base.value}/pdf-library`);
+const pdfLibraryFoldersUrl = computed(() => `${window.location.origin}${base.value}/pdf-library/folders`);
+const pdfLibraryDeleteBase = computed(() => `${window.location.origin}${base.value}/pdf-library`);
 
 const baseUrlForLink = computed(() => props.app_url || (typeof window !== 'undefined' ? window.location.origin : '') || '');
 
@@ -177,10 +187,10 @@ watch(
 
 const tabs = [
     { id: 'modulos', label: 'Módulos', icon: Layers, hasPreview: false },
-    { id: 'introducao', label: 'Introdução', icon: BookOpen, hasPreview: false },
     { id: 'turmas', label: 'Turmas', icon: Users, hasPreview: false },
     { id: 'recomendados', label: 'Cursos recomendados', icon: Sparkles, hasPreview: false },
     { id: 'progresso', label: 'Progresso', icon: BarChart3, hasPreview: false },
+    { id: 'avaliacoes', label: 'Avaliações', icon: Star, hasPreview: false },
     { id: 'comentarios', label: 'Comentários', icon: MessageSquare, hasPreview: false },
 ];
 
@@ -197,6 +207,22 @@ const studentProgressRows = computed(() => {
         String(a.name || a.email || '').localeCompare(String(b.name || b.email || ''), 'pt', { sensitivity: 'base' })
     );
 });
+
+const lessonRatingsRows = computed(() => {
+    const lessons = props.produto.lesson_ratings?.lessons ?? [];
+    return [...lessons].sort((a, b) => {
+        const diff = (b.ratings_count ?? 0) - (a.ratings_count ?? 0);
+        if (diff !== 0) return diff;
+        return String(a.title || '').localeCompare(String(b.title || ''), 'pt', { sensitivity: 'base' });
+    });
+});
+
+const lessonRatingsWithVotes = computed(() => lessonRatingsRows.value.filter((l) => (l.ratings_count ?? 0) > 0));
+
+function formatRatingStars(avg) {
+    if (avg == null) return '—';
+    return Number(avg).toFixed(1).replace('.0', '');
+}
 
 const commentStatusFilter = ref('all');
 const commentActionId = ref(null);
@@ -233,15 +259,14 @@ function rejectComment(commentId) {
 onMounted(() => {
     const p = new URLSearchParams(window.location.search);
     const t = p.get('tab');
-    if (t && tabIds.includes(t)) activeTab.value = t;
+    if (t === 'introducao') {
+        activeTab.value = 'modulos';
+    } else if (t && tabIds.includes(t)) {
+        activeTab.value = t;
+    }
     const moduleIdParam = p.get('moduleId');
     if (moduleIdParam && findModuleById(moduleIdParam)) {
         modulosSelectedModuleId.value = /^\d+$/.test(moduleIdParam) ? Number(moduleIdParam) : moduleIdParam;
-    }
-    const introLessonIdParam = p.get('introLessonId');
-    if (introLessonIdParam && activeTab.value === 'introducao') {
-        const entry = pdfLessonsForIntro.value.find((e) => String(e.lesson.id) === String(introLessonIdParam));
-        if (entry) openIntroEditor(entry);
     }
 });
 watch(activeTab, (id) => {
@@ -524,167 +549,27 @@ const editingModuleId = ref(null);
 const modulosSelectedModuleId = ref(null);
 const modulosLessonForm = ref(null);
 const modulosLessonFormSaving = ref(false);
-const lessonPdfFileInput = ref(null);
-const lessonPdfUploading = ref(false);
+const pdfLibraryOpen = ref(false);
+const pdfLibraryMode = ref('pick');
 
 /** Material (download), apresentação ou leitor PDF — mesmos campos no backend. */
 function isLessonPdfContentType(type) {
     return type === 'pdf' || type === 'pdf_presentation' || type === 'pdf_reader';
 }
 
-/** Aba Introdução: uma página antes do PDF por aula. */
-const introSelectedLessonId = ref(null);
-const introEditorForm = ref(null);
-const introEditorTab = ref('overview');
-const introEditorSaving = ref(false);
-
-const pdfLessonsForIntro = computed(() => {
-    const out = [];
-    for (const mod of props.produto.modules ?? []) {
-        if (mod.related_product_id || mod.external_url) continue;
-        for (const lesson of mod.lessons ?? []) {
-            if (!isLessonPdfContentType(lesson.type)) continue;
-            const files = Array.isArray(lesson.content_files) ? lesson.content_files.length : 0;
-            const hasUrl = !!(lesson.content_url && String(lesson.content_url).trim());
-            const linkCount = Array.isArray(lesson.resource_links) ? lesson.resource_links.length : 0;
-            const hasOverview = !!(lesson.content_text && String(lesson.content_text).trim());
-            out.push({
-                lesson,
-                moduleId: mod.id,
-                moduleTitle: mod.title ?? 'Módulo',
-                fileCount: files || (hasUrl ? 1 : 0),
-                hasOverview,
-                linkCount,
-                isConfigured: hasOverview || linkCount > 0 || files > 0 || hasUrl,
-            });
-        }
-    }
-    return out;
-});
-
-const introSelectedEntry = computed(() =>
-    pdfLessonsForIntro.value.find((e) => e.lesson.id == introSelectedLessonId.value) ?? null
-);
-
-function introLessonTypeLabel(type) {
-    if (type === 'pdf_presentation') return 'Apresentação';
-    if (type === 'pdf_reader') return 'Leitor PDF';
-    return 'Material';
-}
-
-function openIntroEditor(entry) {
-    if (!entry?.lesson) return;
-    introEditorTab.value = 'overview';
-    introSelectedLessonId.value = entry.lesson.id;
-    const lesson = entry.lesson;
-    introEditorForm.value = {
-        lessonId: lesson.id,
-        moduleId: entry.moduleId,
-        moduleTitle: entry.moduleTitle,
-        lessonTitle: lesson.title ?? 'Sem título',
-        lessonType: lesson.type,
-        content_text: lesson.content_text ?? '',
-        resource_links: Array.isArray(lesson.resource_links)
-            ? lesson.resource_links.map((l) => ({
-                  title: (l?.title ?? '').toString(),
-                  url: (l?.url ?? '').toString(),
-              }))
-            : [],
-        fileCount: entry.fileCount,
-    };
-    const url = new URL(window.location.href);
-    url.searchParams.set('introLessonId', String(lesson.id));
-    window.history.replaceState({}, '', url.toString());
-}
-
-function addIntroResourceLink() {
-    if (!introEditorForm.value) return;
-    if (!Array.isArray(introEditorForm.value.resource_links)) introEditorForm.value.resource_links = [];
-    if (introEditorForm.value.resource_links.length >= 20) return;
-    introEditorForm.value.resource_links.push({ title: '', url: '' });
-}
-
-function removeIntroResourceLinkAt(index) {
-    introEditorForm.value?.resource_links?.splice(index, 1);
-}
-
-function goToModulosForIntroFiles() {
-    const form = introEditorForm.value;
-    if (!form?.moduleId) return;
-    activeTab.value = 'modulos';
-    modulosSelectedModuleId.value = form.moduleId;
-    closeModulosLessonForm();
-    const lesson = findModuleById(form.moduleId)?.lessons?.find((l) => l.id == form.lessonId);
-    if (lesson) {
-        nextTick(() => openModulosLessonForm(lesson));
-    }
-}
-
-async function saveIntroEditor() {
-    const form = introEditorForm.value;
-    if (!form?.lessonId) return;
-    introEditorSaving.value = true;
-    try {
-        const resource_links = (Array.isArray(form.resource_links) ? form.resource_links : [])
-            .map((l) => ({
-                title: (l?.title ?? '').toString().trim(),
-                url: (l?.url ?? '').toString().trim(),
-            }))
-            .filter((l) => l.title && l.url);
-        const { data } = await axios.put(
-            `${base.value}/lessons/${form.lessonId}`,
-            {
-                content_text: form.content_text ?? '',
-                resource_links,
-            },
-            { headers: headers() }
-        );
-        const lesson = data?.lesson;
-        if (lesson?.id) {
-            const mod = findModuleById(form.moduleId);
-            mergeLessonIntoModule(mod, lesson);
-            introEditorForm.value = {
-                ...form,
-                content_text: lesson.content_text ?? form.content_text,
-                resource_links: Array.isArray(lesson.resource_links)
-                    ? lesson.resource_links.map((l) => ({
-                          title: (l?.title ?? '').toString(),
-                          url: (l?.url ?? '').toString(),
-                      }))
-                    : form.resource_links,
-            };
-        }
-    } catch (e) {
-        const msg = e.response?.data?.message ?? e.message ?? 'Erro ao salvar introdução.';
-        alert(msg);
-    } finally {
-        introEditorSaving.value = false;
-    }
-}
+const attachmentUploading = ref(false);
+const applyTemplateModalOpen = ref(false);
+const applyTemplateSaving = ref(false);
 
 watch(activeTab, (id) => {
-    if (id === 'introducao') {
-        const hasIntroLessonInUrl =
-            typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('introLessonId');
-        if (
-            !hasIntroLessonInUrl &&
-            pdfLessonsForIntro.value.length > 0 &&
-            !introSelectedLessonId.value
-        ) {
-            openIntroEditor(pdfLessonsForIntro.value[0]);
-        }
-    } else {
-        introEditorForm.value = null;
-        introSelectedLessonId.value = null;
+    if (id === 'modulos') {
+        nextTick(() => ensureFirstModuloSelected());
     }
 });
 
 onMounted(() => {
-    if (activeTab.value !== 'introducao') return;
-    const p = new URLSearchParams(window.location.search);
-    if (p.get('introLessonId')) return;
-    if (pdfLessonsForIntro.value.length > 0 && !introSelectedLessonId.value) {
-        openIntroEditor(pdfLessonsForIntro.value[0]);
+    if (activeTab.value === 'modulos') {
+        ensureFirstModuloSelected();
     }
 });
 
@@ -694,9 +579,28 @@ function pdfLessonFileLabel(type) {
     return 'Material';
 }
 
+/** Lista reativa de módulos (createApp + props mutáveis não atualizam a UI só com .push). */
+const builderModules = ref([...(props.produto.modules ?? [])]);
+
+function syncProdutoModules() {
+    props.produto.modules = builderModules.value;
+}
+
+function appendBuilderModules(newModules) {
+    if (!Array.isArray(newModules) || !newModules.length) return;
+    const next = [...builderModules.value];
+    for (const m of newModules) {
+        if (m?.id != null && !next.some((x) => x.id == m.id)) {
+            next.push(m);
+        }
+    }
+    builderModules.value = next;
+    syncProdutoModules();
+}
+
 function findModuleById(id) {
     if (id == null || id === '') return null;
-    return (props.produto.modules ?? []).find((m) => m.id == id) ?? null;
+    return builderModules.value.find((m) => m.id == id) ?? null;
 }
 
 function mergeLessonIntoModule(module, lesson) {
@@ -720,9 +624,24 @@ function moduleKind(mod) {
 
 const modulosSelectedModule = computed(() => findModuleById(modulosSelectedModuleId.value));
 
+const courseModulesForBuilder = computed(() =>
+    builderModules.value.filter((m) => !m.related_product_id && !m.external_url)
+);
+
 function selectModuleForAulas(moduleId) {
     modulosSelectedModuleId.value = moduleId;
     modulosLessonForm.value = null;
+}
+
+function clearModulosSelection() {
+    modulosSelectedModuleId.value = null;
+    modulosLessonForm.value = null;
+}
+
+function ensureFirstModuloSelected() {
+    if (modulosSelectedModuleId.value != null) return;
+    const first = courseModulesForBuilder.value[0];
+    if (first?.id != null) selectModuleForAulas(first.id);
 }
 
 function openModulosLessonForm(lesson) {
@@ -740,10 +659,25 @@ function openModulosLessonForm(lesson) {
         if (normalizedFiles.length === 0 && lesson.content_url) {
             normalizedFiles.push({ url: lesson.content_url, name: fileLabel });
         }
+        const normalizedAttachments = (Array.isArray(lesson.attachment_files) ? lesson.attachment_files : [])
+            .map((it) => {
+                if (typeof it === 'string') return { url: it, name: 'Anexo' };
+                const url = (it?.url ?? '').toString().trim();
+                if (!url) return null;
+                return { url, name: (it?.name ?? 'Anexo').toString() };
+            })
+            .filter(Boolean);
         modulosLessonForm.value = {
             ...lesson,
             watermark_enabled: !!lesson.watermark_enabled,
             content_files: normalizedFiles,
+            attachment_files: normalizedAttachments,
+            resource_links: Array.isArray(lesson.resource_links)
+                ? lesson.resource_links.map((l) => ({
+                      title: (l?.title ?? '').toString(),
+                      url: (l?.url ?? '').toString(),
+                  }))
+                : [],
             release_mode: lesson.release_at_date ? 'date' : (lesson.release_after_days ? 'days' : 'none'),
             release_after_days: lesson.release_after_days ? String(lesson.release_after_days) : '',
             release_at_date: lesson.release_at_date || '',
@@ -755,6 +689,8 @@ function openModulosLessonForm(lesson) {
             content_url: '',
             link_title: '',
             content_files: [],
+            attachment_files: [],
+            resource_links: [],
             content_text: '',
             watermark_enabled: false,
             release_mode: 'none',
@@ -764,44 +700,124 @@ function openModulosLessonForm(lesson) {
     }
 }
 
+function addModulosResourceLink() {
+    if (!modulosLessonForm.value) return;
+    if (!Array.isArray(modulosLessonForm.value.resource_links)) modulosLessonForm.value.resource_links = [];
+    if (modulosLessonForm.value.resource_links.length >= 20) return;
+    modulosLessonForm.value.resource_links.push({ title: '', url: '' });
+}
+
+function removeModulosResourceLinkAt(index) {
+    modulosLessonForm.value?.resource_links?.splice(index, 1);
+}
+
+function removeLessonAttachmentAt(index) {
+    if (!modulosLessonForm.value?.attachment_files) return;
+    modulosLessonForm.value.attachment_files.splice(index, 1);
+}
+
+async function uploadLessonAttachment(file) {
+    if (!file || !modulosLessonForm.value) return;
+    attachmentUploading.value = true;
+    try {
+        const formData = new FormData();
+        formData.append('file', file);
+        const { data } = await axios.post(uploadAttachmentUrl.value, formData, { headers: uploadHeaders() });
+        if (!data?.url) return;
+        if (!Array.isArray(modulosLessonForm.value.attachment_files)) {
+            modulosLessonForm.value.attachment_files = [];
+        }
+        if (modulosLessonForm.value.attachment_files.length >= 20) {
+            alert('Máximo de 20 anexos por aula.');
+            return;
+        }
+        modulosLessonForm.value.attachment_files.push({
+            url: data.url,
+            name: data.name || file.name || 'Anexo',
+        });
+    } catch (e) {
+        const msg = e.response?.data?.message ?? e.message ?? 'Erro ao enviar anexo.';
+        alert(msg);
+    } finally {
+        attachmentUploading.value = false;
+    }
+}
+
+function openApplyTemplateModal() {
+    if (!modulosLessonForm.value?.id) {
+        alert('Salve a aula antes de replicar o modelo para outras.');
+        return;
+    }
+    applyTemplateModalOpen.value = true;
+}
+
+async function applyLessonTemplate(payload) {
+    const lessonId = modulosLessonForm.value?.id;
+    if (!lessonId) return;
+    applyTemplateSaving.value = true;
+    try {
+        const { data } = await axios.post(
+            `${base.value}/lessons/${lessonId}/apply-template`,
+            payload,
+            { headers: headers() }
+        );
+        const lessons = data?.lessons ?? [];
+        for (const lesson of lessons) {
+            if (!lesson?.id) continue;
+            const mod = builderModules.value.find((m) =>
+                (m.lessons ?? []).some((l) => l.id == lesson.id)
+            );
+            if (mod) mergeLessonIntoModule(mod, lesson);
+        }
+        previewKey.value++;
+        applyTemplateModalOpen.value = false;
+        alert(data?.message ?? `${lessons.length} aula(s) atualizada(s).`);
+    } catch (e) {
+        const msg = e.response?.data?.message ?? e.message ?? 'Erro ao aplicar modelo.';
+        alert(msg);
+    } finally {
+        applyTemplateSaving.value = false;
+    }
+}
+
 function closeModulosLessonForm() {
     modulosLessonForm.value = null;
 }
 
-async function onLessonPdfChange(event) {
-    const files = Array.from(event.target?.files ?? []);
-    if (!files.length || !modulosLessonForm.value) return;
-    lessonPdfUploading.value = true;
-    try {
-        if (!Array.isArray(modulosLessonForm.value.content_files)) modulosLessonForm.value.content_files = [];
-        for (const file of files) {
-            if (!file) continue;
-            if (file.type !== 'application/pdf') {
-                alert('Selecione apenas arquivos em formato PDF.');
-                continue;
-            }
-            const formData = new FormData();
-            formData.append('file', file);
-            const { data } = await axios.post(uploadPdfUrl.value, formData, { headers: uploadHeaders() });
-            if (data?.url) {
-                modulosLessonForm.value.content_files.push({ url: data.url, name: file.name });
-            }
-        }
-        const first = modulosLessonForm.value.content_files?.[0]?.url ?? '';
-        modulosLessonForm.value.content_url = first || modulosLessonForm.value.content_url || '';
-    } catch (e) {
-        const msg = e.response?.data?.message ?? e.message ?? `Erro ao enviar material. Tamanho máx. ${uploadLimits.value.pdf_max_mb} MB.`;
-        alert(msg);
-    } finally {
-        lessonPdfUploading.value = false;
-        if (lessonPdfFileInput.value) lessonPdfFileInput.value.value = '';
+function openPdfLibrary(mode = 'pick') {
+    pdfLibraryMode.value = mode;
+    pdfLibraryOpen.value = true;
+}
+
+function onLibraryPdfsSelected(picked) {
+    if (!modulosLessonForm.value || !Array.isArray(picked) || !picked.length) return;
+    if (!Array.isArray(modulosLessonForm.value.content_files)) {
+        modulosLessonForm.value.content_files = [];
     }
+    const existing = modulosLessonForm.value.content_files;
+    for (const item of picked) {
+        if (!item?.url) continue;
+        const dup = existing.some(
+            (f) =>
+                (item.library_item_id && f.library_item_id === item.library_item_id) ||
+                (f.url && f.url === item.url)
+        );
+        if (dup) continue;
+        if (existing.length >= 30) {
+            alert('Máximo de 30 arquivos PDF por aula.');
+            break;
+        }
+        const entry = { url: item.url, name: item.name || 'documento.pdf' };
+        if (item.library_item_id) entry.library_item_id = item.library_item_id;
+        existing.push(entry);
+    }
+    const first = modulosLessonForm.value.content_files?.[0]?.url ?? '';
+    modulosLessonForm.value.content_url = first || modulosLessonForm.value.content_url || '';
 }
 
 function clearLessonPdf() {
     if (modulosLessonForm.value) modulosLessonForm.value.content_url = '';
     if (modulosLessonForm.value) modulosLessonForm.value.content_files = [];
-    if (lessonPdfFileInput.value) lessonPdfFileInput.value.value = '';
 }
 
 function removeLessonPdfAt(index) {
@@ -814,10 +830,16 @@ function removeLessonPdfAt(index) {
 function lessonPayload(form) {
     const contentFiles = Array.isArray(form.content_files)
         ? form.content_files
-              .map((it) => ({
-                  url: (it?.url ?? '').toString().trim(),
-                  name: (it?.name ?? '').toString().trim(),
-              }))
+              .map((it) => {
+                  const entry = {
+                      url: (it?.url ?? '').toString().trim(),
+                      name: (it?.name ?? '').toString().trim(),
+                  };
+                  if (it?.library_item_id) {
+                      entry.library_item_id = it.library_item_id;
+                  }
+                  return entry;
+              })
               .filter((it) => it.url)
         : [];
     const firstFileUrl = contentFiles[0]?.url ?? '';
@@ -829,17 +851,32 @@ function lessonPayload(form) {
     } else if (form.release_mode === 'date') {
         release_at_date = form.release_at_date?.trim() || null;
     }
+    const attachmentFiles = Array.isArray(form.attachment_files)
+        ? form.attachment_files
+              .map((it) => ({
+                  url: (it?.url ?? '').toString().trim(),
+                  name: (it?.name ?? '').toString().trim(),
+              }))
+              .filter((it) => it.url)
+        : [];
+    const resource_links = (Array.isArray(form.resource_links) ? form.resource_links : [])
+        .map((l) => ({
+            title: (l?.title ?? '').toString().trim(),
+            url: (l?.url ?? '').toString().trim(),
+        }))
+        .filter((l) => l.title && l.url);
+
     return {
         title: (form.title ?? '').trim() || 'Sem título',
         type: form.type ?? 'video',
         content_url: (isLessonPdfContentType(form.type) ? (firstFileUrl || form.content_url) : form.content_url) ?? '',
         link_title: form.link_title != null ? String(form.link_title).trim() : '',
         content_files: isLessonPdfContentType(form.type) ? contentFiles : [],
+        attachment_files: attachmentFiles,
         release_after_days,
         release_at_date,
-        ...(isLessonPdfContentType(form.type)
-            ? {}
-            : { content_text: form.content_text ?? '' }),
+        content_text: form.content_text ?? '',
+        resource_links,
         duration_seconds: 0,
         is_free: false,
         watermark_enabled: !!form.watermark_enabled,
@@ -863,7 +900,7 @@ async function saveLessonFromSidebar() {
         }
         mergeLessonIntoModule(modulosSelectedModule.value, lesson);
         previewKey.value++;
-        closeModulosLessonForm();
+        openModulosLessonForm(lesson);
     } catch (e) {
         const msg = e.response?.data?.message ?? e.response?.data?.errors?.title?.[0] ?? e.message ?? 'Erro ao salvar.';
         alert(msg);
@@ -887,7 +924,7 @@ function toggleModule(moduleId) {
 }
 
 function expandAllModulos() {
-    expandedModules.value = new Set((props.produto.modules ?? []).map((m) => m.id));
+    expandedModules.value = new Set(builderModules.value.map((m) => m.id));
 }
 
 function collapseAllModulos() {
@@ -895,9 +932,9 @@ function collapseAllModulos() {
 }
 
 watch(
-    [activeTab, () => props.produto.modules],
+    [activeTab, () => builderModules.value.length],
     () => {
-        if (activeTab.value === 'modulos' && (props.produto.modules?.length ?? 0) > 0) {
+        if (activeTab.value === 'modulos' && builderModules.value.length > 0) {
             expandAllModulos();
         }
     },
@@ -1472,14 +1509,12 @@ async function confirmModuleModal() {
                 imported[0] = { ...imported[0], thumbnail: thumbUrl };
             }
         }
-        if (!props.produto.modules) props.produto.modules = [];
-        for (const newModule of imported) {
-            props.produto.modules.push(newModule);
-            expandedModules.value = new Set([...expandedModules.value, newModule.id]);
-        }
-        if (imported.length === 1) {
-            selectModuleForAulas(imported[0].id);
-        }
+        appendBuilderModules(imported);
+        expandedModules.value = new Set([
+            ...expandedModules.value,
+            ...imported.map((m) => m.id).filter((id) => id != null),
+        ]);
+        selectModuleForAulas(imported[0].id);
         previewKey.value++;
         closeModuleModal();
     } catch (_) {
@@ -1519,8 +1554,7 @@ async function duplicateModule(moduleId) {
             reload();
             return;
         }
-        if (!props.produto.modules) props.produto.modules = [];
-        props.produto.modules.push(mod);
+        appendBuilderModules([mod]);
         expandedModules.value = new Set([...expandedModules.value, mod.id]);
         selectModuleForAulas(mod.id);
         previewKey.value++;
@@ -1539,7 +1573,7 @@ async function duplicateLesson(lessonId) {
         }
         const module =
             modulosSelectedModule.value
-            ?? (props.produto.modules ?? []).find((m) => (m.lessons ?? []).some((l) => l.id == lessonId));
+            ?? builderModules.value.find((m) => (m.lessons ?? []).some((l) => l.id == lessonId));
         if (module) {
             module.lessons = [...(module.lessons ?? []), lesson];
         } else {
@@ -2100,518 +2134,125 @@ const inputClass = 'block w-full rounded-lg border border-zinc-300 bg-white px-3
                     </template>
 
                     <template v-else-if="activeTab === 'modulos'">
+                        <div class="flex min-h-[24rem] flex-col sm:min-h-[28rem] lg:h-[calc(100dvh-7.5rem)] lg:max-h-[calc(100dvh-7.5rem)]">
                         <input ref="moduleThumbnailFileInput" type="file" accept="image/*" class="hidden" @change="onModuleThumbnailChange" />
-                        <div class="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden lg:flex-row">
-                            <div class="min-w-0 flex-1 overflow-y-auto overflow-x-hidden pr-2">
-                        <h2 class="mb-1 text-sm font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Estrutura do curso</h2>
-                        <p class="mb-3 text-xs text-zinc-500 dark:text-zinc-400">Módulos e aulas. Clique em um módulo (ou em &quot;Aulas&quot;) para editar no painel à direita.</p>
-                        <div class="mb-3 flex flex-wrap items-center gap-2">
-                            <Button size="sm" @click="openModuleModal"><Plus class="mr-1.5 h-4 w-4" /> Novo módulo</Button>
+                        <MemberBuilderModulosTab
+                            class="min-h-0 flex-1"
+                            :modules="courseModulesForBuilder"
+                            :selected-module-id="modulosSelectedModuleId"
+                            :selected-module="modulosSelectedModule"
+                            :lesson-form="modulosLessonForm"
+                            :lesson-form-saving="modulosLessonFormSaving"
+                            :upload-limits="uploadLimits"
+                            :input-class="inputClass"
+                            @select-module="selectModuleForAulas"
+                            @clear-selection="clearModulosSelection"
+                            @open-module-modal="openModuleModal"
+                            @open-module-edit="openModuleEdit"
+                            @duplicate-module="duplicateModule"
+                            @delete-module="deleteModule"
+                            @open-lesson-form="openModulosLessonForm"
+                            @close-lesson-form="closeModulosLessonForm"
+                            @duplicate-lesson="duplicateLesson"
+                            @delete-lesson="deleteLesson"
+                            @save-lesson="saveLessonFromSidebar"
+                            @open-pdf-library="openPdfLibrary"
+                            @clear-lesson-pdf="clearLessonPdf"
+                            @remove-lesson-pdf-at="removeLessonPdfAt"
+                            :comments-enabled="configForm.member_area_config.comments_enabled"
+                            :attachment-uploading="attachmentUploading"
+                            @add-resource-link="addModulosResourceLink"
+                            @remove-resource-link-at="removeModulosResourceLinkAt"
+                            @upload-attachment="uploadLessonAttachment"
+                            @remove-attachment-at="removeLessonAttachmentAt"
+                            @go-comentarios="activeTab = 'comentarios'"
+                            @open-apply-template="openApplyTemplateModal"
+                        />
+                        <LessonApplyTemplateModal
+                            :open="applyTemplateModalOpen"
+                            :source-lesson="modulosLessonForm"
+                            :source-module-title="modulosSelectedModule?.title ?? ''"
+                            :modules="builderModules"
+                            :saving="applyTemplateSaving"
+                            @close="applyTemplateModalOpen = false"
+                            @apply="applyLessonTemplate"
+                        />
                         </div>
-                        <div class="grid grid-cols-2 gap-2 sm:grid-cols-3">
-                            <template v-for="modItem in produto.modules" :key="'course-' + modItem.id">
-                                <div
-                                    v-if="!modItem.related_product_id && !modItem.external_url"
-                                    class="flex flex-col overflow-hidden rounded-lg border border-zinc-200 bg-white shadow-sm transition dark:border-zinc-700 dark:bg-zinc-800/80"
-                                    :class="{ 'ring-2 ring-sky-500/50 dark:ring-sky-400/40': modulosSelectedModuleId === modItem.id }"
-                                >
-                                    <button type="button" class="flex min-w-0 flex-1 flex-col items-stretch text-left" @click="selectModuleForAulas(modItem.id)">
-                                        <div class="h-14 w-full shrink-0 overflow-hidden bg-zinc-200 dark:bg-zinc-700">
-                                            <img v-if="modItem.thumbnail" :src="modItem.thumbnail" :alt="modItem.title" class="h-full w-full object-cover" />
-                                            <div v-else class="flex h-full w-full items-center justify-center text-zinc-400 dark:text-zinc-500">
-                                                <BookOpen class="h-5 w-5" />
-                                            </div>
-                                        </div>
-                                        <div class="min-w-0 flex-1 p-1.5">
-                                            <p class="truncate text-xs font-medium text-zinc-800 dark:text-zinc-200">{{ modItem.title }}</p>
-                                            <p class="text-[10px] text-zinc-500 dark:text-zinc-400">{{ (modItem.lessons?.length ?? 0) }} {{ (modItem.lessons?.length ?? 0) === 1 ? 'aula' : 'aulas' }}</p>
-                                        </div>
-                                    </button>
-                                    <div class="flex items-center gap-0.5 border-t border-zinc-200 p-1 dark:border-zinc-700">
-                                        <Button size="sm" variant="outline" class="!py-0.5 !text-[10px] flex-1 min-w-0" @click.stop="selectModuleForAulas(modItem.id)">Aulas</Button>
-                                        <button type="button" class="rounded p-1 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-700 dark:hover:bg-zinc-700 dark:hover:text-zinc-300" title="Duplicar" @click.stop="duplicateModule(modItem.id)"><Copy class="h-3 w-3" /></button>
-                                        <button type="button" class="rounded p-1 text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-700" title="Editar" @click.stop="openModuleEdit(modItem)"><Pencil class="h-3 w-3" /></button>
-                                        <button type="button" class="rounded p-1 text-red-600 hover:bg-red-50" title="Remover" @click.stop="deleteModule(modItem.id)"><Trash2 class="h-3 w-3" /></button>
-                                    </div>
+                    </template>
+                    <template v-else-if="activeTab === 'turmas'">
+                        <div class="flex flex-col gap-6 lg:flex-row lg:gap-8">
+                            <!-- Coluna esquerda: ações e referência -->
+                            <div class="shrink-0 space-y-6 lg:w-72">
+                                <div>
+                                    <h2 class="mb-1 text-sm font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Turmas e alunos</h2>
+                                    <p class="mb-4 text-xs text-zinc-500 dark:text-zinc-400">Organize os alunos em turmas. Alunos são quem têm acesso ao produto (compradores ou adicionados manualmente).</p>
+                                    <Button class="w-full" size="sm" @click="addTurma">
+                                        <Plus class="mr-2 h-4 w-4" />
+                                        Nova turma
+                                    </Button>
                                 </div>
-                            </template>
-                            <template v-if="false" v-for="mod in produto.modules" :key="mod.id">
-                                <div class="min-w-0 rounded-lg border border-zinc-200 bg-white dark:border-zinc-700 dark:bg-zinc-900">
-                                    <div class="flex min-w-0 items-start gap-2 py-2 px-3">
-                                        <button type="button" class="mt-0.5 shrink-0 rounded p-0.5 text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300" @click="toggleSection(section.id)" aria-label="Expandir ou recolher">
-                                            <ChevronRight v-if="!expandedSections.has(section.id)" class="h-4 w-4" />
-                                            <ChevronDown v-else class="h-4 w-4" />
-                                        </button>
-                                        <div class="min-w-0 flex-1 flex flex-col gap-2">
-                                            <!-- Tags sempre em cima -->
-                                            <div class="flex flex-wrap items-center gap-1.5">
-                                                <span class="inline-flex shrink-0 items-center gap-1 rounded bg-zinc-100 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-zinc-500 dark:bg-zinc-700 dark:text-zinc-400">
-                                                    <FolderOpen class="h-3 w-3" /> Seção
-                                                </span>
-                                                <span class="shrink-0 rounded bg-zinc-200 px-1.5 py-0.5 text-[10px] font-medium text-zinc-600 dark:bg-zinc-600 dark:text-zinc-300">{{ sectionTypeLabel(section.section_type ?? 'courses') }}</span>
-                                            </div>
-                                            <!-- Conteúdo: edição ou visualização -->
-                                            <template v-if="editingSectionId === section.id">
-                                                <input v-model="editingSectionTitle" type="text" :class="inputClass" class="!py-1.5 !text-sm min-w-0 w-full" placeholder="Título da seção" @keydown.enter="saveSectionTitle" @keydown.escape="cancelEdit" />
-                                                <div class="space-y-1.5">
-                                                    <span class="block text-xs font-medium text-zinc-600 dark:text-zinc-400">Modo de capa dos módulos</span>
-                                                    <div class="flex flex-wrap items-center gap-2">
-                                                        <button
-                                                            type="button"
-                                                            :aria-pressed="editingSectionCoverMode === 'vertical'"
-                                                            :class="editingSectionCoverMode === 'vertical'
-                                                                ? 'border-sky-500 bg-sky-500/10 ring-1 ring-sky-500/30 dark:bg-sky-500/15'
-                                                                : 'border-zinc-200 dark:border-zinc-600 hover:bg-zinc-50 dark:hover:bg-zinc-800/60'"
-                                                            class="flex flex-col items-center gap-1 rounded-lg border-2 p-2 transition-all duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-500 focus-visible:ring-offset-1"
-                                                            @click="editingSectionCoverMode = 'vertical'"
-                                                        >
-                                                            <div class="aspect-[2/3] w-8 rounded bg-gradient-to-b from-zinc-400 to-zinc-500 dark:from-zinc-500 dark:to-zinc-600" aria-hidden="true" />
-                                                            <span class="text-[10px] font-medium text-zinc-600 dark:text-zinc-300">Vertical</span>
-                                                        </button>
-                                                        <button
-                                                            type="button"
-                                                            :aria-pressed="editingSectionCoverMode === 'horizontal'"
-                                                            :class="editingSectionCoverMode === 'horizontal'
-                                                                ? 'border-sky-500 bg-sky-500/10 ring-1 ring-sky-500/30 dark:bg-sky-500/15'
-                                                                : 'border-zinc-200 dark:border-zinc-600 hover:bg-zinc-50 dark:hover:bg-zinc-800/60'"
-                                                            class="flex flex-col items-center gap-1 rounded-lg border-2 p-2 transition-all duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-500 focus-visible:ring-offset-1"
-                                                            @click="editingSectionCoverMode = 'horizontal'"
-                                                        >
-                                                            <div class="aspect-video w-10 rounded bg-gradient-to-r from-zinc-400 to-zinc-500 dark:from-zinc-500 dark:to-zinc-600" aria-hidden="true" />
-                                                            <span class="text-[10px] font-medium text-zinc-600 dark:text-zinc-300">Banner</span>
-                                                        </button>
-                                                    </div>
-                                                </div>
-                                                <div class="flex flex-wrap items-center gap-2 pt-0.5">
-                                                    <Button size="sm" class="shrink-0" @click="saveSectionTitle">Ok</Button>
-                                                    <Button size="sm" variant="ghost" @click="cancelEdit">Cancelar</Button>
-                                                </div>
-                                            </template>
-                                            <template v-else>
-                                                <div class="flex min-w-0 items-center justify-between gap-2">
-                                                    <span class="min-w-0 truncate cursor-pointer text-sm font-medium text-zinc-800 dark:text-zinc-200" @click="toggleSection(section.id)">{{ section.title }}</span>
-                                                    <div class="flex shrink-0 items-center gap-1">
-                                                        <button type="button" class="rounded p-1.5 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-700 dark:hover:bg-zinc-700 dark:hover:text-zinc-300" title="Editar seção" @click.stop="openSectionEdit(section)"><Pencil class="h-3.5 w-3.5" /></button>
-                                                        <Button size="sm" variant="outline" class="!py-1 !text-xs" @click.stop="openModuleModal(section.id)">+ Módulo</Button>
-                                                        <button type="button" class="rounded p-1.5 text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30" title="Remover seção" @click.stop="deleteSection(section.id)"><Trash2 class="h-3.5 w-3.5" /></button>
-                                                    </div>
-                                                </div>
-                                            </template>
-                                        </div>
-                                    </div>
-                                    <div v-if="expandedSections.has(section.id)" class="min-w-0 border-t border-zinc-200 bg-zinc-50/50 px-3 pb-3 pt-2 dark:border-zinc-700 dark:bg-zinc-800/30">
-                                        <!-- Seção tipo Cursos/Aulas: grid de cards de módulos -->
-                                        <template v-if="(section.section_type ?? 'courses') === 'courses'">
-                                            <div class="grid grid-cols-3 gap-2">
-                                                <div
-                                                    v-for="mod in section.modules"
-                                                    :key="mod.id"
-                                                    class="flex flex-col overflow-hidden rounded-lg border border-zinc-200 bg-white shadow-sm transition dark:border-zinc-700 dark:bg-zinc-800/80"
-                                                    :class="{ 'ring-2 ring-sky-500/50 dark:ring-sky-400/40': modulosSelectedModuleId === mod.id }"
-                                                >
-                                                    <button type="button" class="flex min-w-0 flex-1 flex-col items-stretch text-left" @click="selectModuleForAulas(mod.id)">
-                                                        <div class="h-14 w-full shrink-0 overflow-hidden bg-zinc-200 dark:bg-zinc-700">
-                                                            <img v-if="mod.thumbnail" :src="mod.thumbnail" :alt="mod.title" class="h-full w-full object-cover" />
-                                                            <div v-else class="flex h-full w-full items-center justify-center text-zinc-400 dark:text-zinc-500">
-                                                                <BookOpen class="h-5 w-5" />
-                                                            </div>
-                                                        </div>
-                                                        <div class="min-w-0 flex-1 p-1.5">
-                                                            <p class="truncate text-xs font-medium text-zinc-800 dark:text-zinc-200">{{ mod.title }}</p>
-                                                            <p class="text-[10px] text-zinc-500 dark:text-zinc-400">{{ (mod.lessons?.length ?? 0) }} {{ (mod.lessons?.length ?? 0) === 1 ? 'aula' : 'aulas' }}</p>
-                                                        </div>
-                                                    </button>
-                                                    <div class="flex items-center gap-0.5 border-t border-zinc-200 p-1 dark:border-zinc-700">
-                                                        <Button size="sm" variant="outline" class="!py-0.5 !text-[10px] flex-1 min-w-0" @click.stop="selectModuleForAulas(mod.id)">Aulas</Button>
-                                                        <button type="button" class="rounded p-1 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-700 dark:hover:bg-zinc-700 dark:hover:text-zinc-300" title="Duplicar módulo" @click.stop="duplicateModule(mod.id)"><Copy class="h-3 w-3" /></button>
-                                                        <button type="button" class="rounded p-1 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-700 dark:hover:bg-zinc-700 dark:hover:text-zinc-300" title="Editar módulo" @click.stop="openModuleEdit(mod)"><Pencil class="h-3 w-3" /></button>
-                                                        <button type="button" class="rounded p-1 text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30" title="Remover módulo" @click.stop="deleteModule(mod.id)"><Trash2 class="h-3 w-3" /></button>
-                                                    </div>
-                                                </div>
-                                            </div>
-                                            <!-- Edição do módulo (quando editingModuleId está neste módulo da seção) -->
-                                            <template v-for="mod in section.modules" :key="'edit-' + mod.id">
-                                                <div v-if="editingModuleId === mod.id" class="mt-3 rounded-xl border border-zinc-200 bg-zinc-50/80 p-3 dark:border-zinc-600 dark:bg-zinc-800/50">
-                                                    <div class="mb-2 flex flex-wrap items-center justify-between gap-2">
-                                                        <p class="text-xs font-medium text-zinc-600 dark:text-zinc-400">Editar módulo</p>
-                                                        <Toggle
-                                                            :model-value="editingModuleShowTitleOnCover"
-                                                            label="Mostrar título na capa"
-                                                            class="!mb-0"
-                                                            @update:model-value="(v) => { editingModuleShowTitleOnCover = v; setModuleShowTitleOnCover(v); }"
-                                                        />
-                                                    </div>
-                                                    <div class="mb-3">
-                                                        <input v-model="editingModuleTitle" type="text" :class="inputClass" class="!py-1.5 !text-sm w-full" placeholder="Título do módulo" @keydown.enter="saveModuleTitle" @keydown.escape="cancelEdit" />
-                                                    </div>
-                                                    <div class="mb-3">
-                                                        <label class="mb-1 block text-xs font-medium text-zinc-600 dark:text-zinc-400">Liberação</label>
-                                                        <div class="grid gap-2 sm:grid-cols-3">
-                                                            <select v-model="editingModuleReleaseMode" :class="inputClass" class="!py-1.5 !text-xs w-full">
-                                                                <option value="none">Imediata</option>
-                                                                <option value="days">Após X dias</option>
-                                                                <option value="date">Na data</option>
-                                                            </select>
-                                                            <input
-                                                                v-if="editingModuleReleaseMode === 'days'"
-                                                                v-model="editingModuleReleaseAfterDays"
-                                                                type="number"
-                                                                min="1"
-                                                                step="1"
-                                                                :class="inputClass"
-                                                                class="!py-1.5 !text-xs w-full"
-                                                                placeholder="Ex.: 7"
-                                                            />
-                                                            <input
-                                                                v-else-if="editingModuleReleaseMode === 'date'"
-                                                                v-model="editingModuleReleaseAtDate"
-                                                                type="date"
-                                                                :class="inputClass"
-                                                                class="!py-1.5 !text-xs w-full"
-                                                            />
-                                                            <div v-else class="hidden sm:block" />
-                                                        </div>
-                                                    </div>
-                                                    <div v-if="editingModule?.thumbnail" class="mb-3 flex items-center gap-3">
-                                                        <div :class="section.cover_mode === 'horizontal' ? 'aspect-video w-24 shrink-0' : 'aspect-[2/3] h-20 w-14 shrink-0'" class="overflow-hidden rounded-lg shadow-sm">
-                                                            <img :src="editingModule.thumbnail" alt="Capa" class="h-full w-full object-cover" />
-                                                        </div>
-                                                        <div class="flex flex-wrap gap-2">
-                                                            <Button type="button" size="sm" variant="outline" class="!py-1 !text-xs" :disabled="moduleThumbnailUploading" @click="moduleThumbnailFileInput?.click()">Trocar imagem</Button>
-                                                            <Button type="button" size="sm" variant="ghost" class="!py-1 !text-xs text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30" :disabled="moduleThumbnailUploading" @click="removeModuleThumbnail">Remover</Button>
-                                                        </div>
-                                                    </div>
-                                                    <template v-else>
-                                                        <div class="mb-3 flex flex-wrap items-center gap-2">
-                                                            <Button type="button" size="sm" variant="outline" class="!py-1.5 !text-xs" :disabled="moduleThumbnailUploading" @click="moduleThumbnailFileInput?.click()">
-                                                                {{ moduleThumbnailUploading ? 'Enviando…' : 'Enviar capa' }}
-                                                            </Button>
-                                                            <span class="text-xs text-zinc-500 dark:text-zinc-400">{{ section.cover_mode === 'horizontal' ? 'Banner.' : 'Vertical.' }} Máx. {{ uploadLimits.image_max_mb }} MB.</span>
-                                                        </div>
-                                                    </template>
-                                                    <div class="flex gap-2">
-                                                        <Button size="sm" @click="saveModuleTitle">Ok</Button>
-                                                        <Button size="sm" variant="ghost" @click="cancelEdit">Cancelar</Button>
-                                                    </div>
-                                                </div>
-                                            </template>
-                                        </template>
-                                        <!-- Seção tipo Outros produtos -->
-                                        <template v-else-if="(section.section_type ?? 'courses') === 'products'">
-                                            <template v-for="mod in section.modules" :key="mod.id">
-                                                <div class="ml-2 mt-2 min-w-0 rounded-md border border-zinc-200 bg-white/80 dark:border-zinc-600 dark:bg-zinc-800/50">
-                                                    <div class="flex min-w-0 flex-wrap items-center gap-2 py-1.5 px-2">
-                                                        <span class="flex shrink-0 items-center gap-1 rounded bg-zinc-100/80 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-zinc-500 dark:bg-zinc-700 dark:text-zinc-400"><ShoppingBag class="h-3 w-3" /> Produto</span>
-                                                        <template v-if="editingModuleId === mod.id">
-                                                            <div class="flex min-w-0 flex-1 flex-col gap-2">
-                                                                <input v-model="editingModuleTitle" type="text" :class="inputClass" class="!py-1.5 !text-xs min-w-0 w-full" placeholder="Título" @keydown.enter="saveModuleTitle" @keydown.escape="cancelEdit" />
-                                                                <select v-model="editingModuleRelatedProductId" :class="inputClass" class="!py-1.5 !text-xs min-w-0 w-full">
-                                                                    <option :value="null">Selecione o produto</option>
-                                                                    <option v-for="p in tenant_products" :key="p.id" :value="p.id">{{ p.name }}</option>
-                                                                </select>
-                                                                <div class="flex flex-wrap items-center gap-2">
-                                                                    <select v-model="editingModuleAccessType" :class="inputClass" class="!py-1 !text-xs w-full min-w-0 sm:w-auto">
-                                                                        <option value="paid">Pago</option>
-                                                                        <option value="free">Liberado</option>
-                                                                    </select>
-                                                                    <Button size="sm" class="!py-0.5 !text-xs shrink-0" @click="saveModuleTitle">Ok</Button>
-                                                                    <Button size="sm" variant="ghost" class="!py-0.5 !text-xs shrink-0" @click="cancelEdit">Cancelar</Button>
-                                                                </div>
-                                                            </div>
-                                                        </template>
-                                                        <template v-else>
-                                                            <span class="min-w-0 flex-1 truncate text-xs font-medium text-zinc-700 dark:text-zinc-300">{{ mod.title }}</span>
-                                                            <span class="shrink-0 truncate text-xs text-zinc-500 dark:text-zinc-400" :title="mod.related_product?.name">{{ mod.related_product?.name ?? '#' + mod.related_product_id }}</span>
-                                                            <span class="shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium" :class="mod.access_type === 'free' ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300' : 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300'">{{ mod.access_type === 'free' ? 'Liberado' : 'Pago' }}</span>
-                                                            <div class="flex shrink-0 items-center gap-0.5">
-                                                                <button type="button" class="rounded p-1 text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-700" title="Editar" @click.stop="openModuleEdit(mod)"><Pencil class="h-3 w-3" /></button>
-                                                                <button type="button" class="rounded p-1 text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30" title="Remover" @click.stop="deleteModule(mod.id)"><Trash2 class="h-3 w-3" /></button>
-                                                            </div>
-                                                        </template>
-                                                    </div>
-                                                    <!-- Capa do módulo (Outros produtos) -->
-                                                    <div v-if="editingModuleId === mod.id" class="ml-6 mt-2 rounded-lg border border-zinc-200 bg-zinc-50/80 p-3 dark:border-zinc-600 dark:bg-zinc-800/50">
-                                                        <div class="mb-2 flex flex-wrap items-center justify-between gap-2">
-                                                            <p class="text-xs font-medium text-zinc-600 dark:text-zinc-400">Capa do módulo ({{ (section.cover_mode === 'horizontal' ? 'banner' : 'vertical') }})</p>
-                                                            <Toggle
-                                                                :model-value="editingModuleShowTitleOnCover"
-                                                                label="Mostrar título na capa"
-                                                                class="!mb-0"
-                                                                @update:model-value="(v) => { editingModuleShowTitleOnCover = v; setModuleShowTitleOnCover(v); }"
-                                                            />
-                                                        </div>
-                                                        <div v-if="editingModule?.thumbnail" class="flex items-center gap-3">
-                                                            <div :class="section.cover_mode === 'horizontal' ? 'aspect-video w-24 shrink-0' : 'aspect-[2/3] h-20 w-14 shrink-0'" class="overflow-hidden rounded-lg shadow-sm">
-                                                                <img :src="editingModule.thumbnail" alt="Capa" class="h-full w-full object-cover" />
-                                                            </div>
-                                                            <div class="flex flex-wrap gap-2">
-                                                                <Button type="button" size="sm" variant="outline" class="!py-1 !text-xs" :disabled="moduleThumbnailUploading" @click="moduleThumbnailFileInput?.click()">Trocar imagem</Button>
-                                                                <Button type="button" size="sm" variant="ghost" class="!py-1 !text-xs text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30" :disabled="moduleThumbnailUploading" @click="removeModuleThumbnail">Remover</Button>
-                                                            </div>
-                                                        </div>
-                                                        <template v-else>
-                                                            <div class="flex flex-wrap items-center gap-2">
-                                                                <Button type="button" size="sm" variant="outline" class="!py-1.5 !text-xs" :disabled="moduleThumbnailUploading" @click="moduleThumbnailFileInput?.click()">
-                                                                    {{ moduleThumbnailUploading ? 'Enviando…' : 'Enviar capa' }}
-                                                                </Button>
-                                                                <span class="text-xs text-zinc-500 dark:text-zinc-400">{{ section.cover_mode === 'horizontal' ? 'Recomendado: 1200×630 px (banner).' : 'Recomendado: 400×600 px (vertical).' }} Máx. {{ uploadLimits.image_max_mb }} MB.</span>
-                                                            </div>
-                                                        </template>
-                                                    </div>
-                                                </div>
-                                            </template>
-                                        </template>
-                                        <!-- Seção tipo Links externos -->
-                                        <template v-else>
-                                            <template v-for="mod in section.modules" :key="mod.id">
-                                                <div class="ml-2 mt-2 min-w-0 rounded-md border border-zinc-200 bg-white/80 dark:border-zinc-600 dark:bg-zinc-800/50">
-                                                    <div class="flex min-w-0 flex-wrap items-center gap-2 py-1.5 px-2">
-                                                        <span class="flex shrink-0 items-center gap-1 rounded bg-zinc-100/80 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-zinc-500 dark:bg-zinc-700 dark:text-zinc-400"><ExternalLink class="h-3 w-3" /> Link</span>
-                                                        <template v-if="editingModuleId === mod.id">
-                                                            <div class="flex min-w-0 flex-1 flex-col gap-2">
-                                                                <input v-model="editingModuleTitle" type="text" :class="inputClass" class="!py-1.5 !text-xs min-w-0 w-full" placeholder="Título" @keydown.enter="saveModuleTitle" @keydown.escape="cancelEdit" />
-                                                                <input v-model="editingModuleExternalUrl" type="url" :class="inputClass" class="!py-1.5 !text-xs min-w-0 w-full" placeholder="https://..." />
-                                                                <div class="flex flex-wrap items-center gap-2">
-                                                                    <Button size="sm" class="!py-0.5 !text-xs shrink-0" @click="saveModuleTitle">Ok</Button>
-                                                                    <Button size="sm" variant="ghost" class="!py-0.5 !text-xs shrink-0" @click="cancelEdit">Cancelar</Button>
-                                                                </div>
-                                                            </div>
-                                                        </template>
-                                                        <template v-else>
-                                                            <span class="min-w-0 flex-1 truncate text-xs font-medium text-zinc-700 dark:text-zinc-300">{{ mod.title }}</span>
-                                                            <a :href="mod.external_url" target="_blank" rel="noopener" class="min-w-0 max-w-[50%] truncate text-xs text-sky-600 hover:underline dark:text-sky-400" :title="mod.external_url">{{ mod.external_url }}</a>
-                                                            <div class="flex shrink-0 items-center gap-0.5">
-                                                                <button type="button" class="rounded p-1 text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-700" title="Editar" @click.stop="openModuleEdit(mod)"><Pencil class="h-3 w-3" /></button>
-                                                                <button type="button" class="rounded p-1 text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30" title="Remover" @click.stop="deleteModule(mod.id)"><Trash2 class="h-3 w-3" /></button>
-                                                            </div>
-                                                        </template>
-                                                    </div>
-                                                    <!-- Capa do módulo (Links externos) -->
-                                                    <div v-if="editingModuleId === mod.id" class="ml-6 mt-2 rounded-lg border border-zinc-200 bg-zinc-50/80 p-3 dark:border-zinc-600 dark:bg-zinc-800/50">
-                                                        <div class="mb-2 flex flex-wrap items-center justify-between gap-2">
-                                                            <p class="text-xs font-medium text-zinc-600 dark:text-zinc-400">Capa do módulo ({{ (section.cover_mode === 'horizontal' ? 'banner' : 'vertical') }})</p>
-                                                            <Toggle
-                                                                :model-value="editingModuleShowTitleOnCover"
-                                                                label="Mostrar título na capa"
-                                                                class="!mb-0"
-                                                                @update:model-value="(v) => { editingModuleShowTitleOnCover = v; setModuleShowTitleOnCover(v); }"
-                                                            />
-                                                        </div>
-                                                        <div v-if="editingModule?.thumbnail" class="flex items-center gap-3">
-                                                            <div :class="section.cover_mode === 'horizontal' ? 'aspect-video w-24 shrink-0' : 'aspect-[2/3] h-20 w-14 shrink-0'" class="overflow-hidden rounded-lg shadow-sm">
-                                                                <img :src="editingModule.thumbnail" alt="Capa" class="h-full w-full object-cover" />
-                                                            </div>
-                                                            <div class="flex flex-wrap gap-2">
-                                                                <Button type="button" size="sm" variant="outline" class="!py-1 !text-xs" :disabled="moduleThumbnailUploading" @click="moduleThumbnailFileInput?.click()">Trocar imagem</Button>
-                                                                <Button type="button" size="sm" variant="ghost" class="!py-1 !text-xs text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30" :disabled="moduleThumbnailUploading" @click="removeModuleThumbnail">Remover</Button>
-                                                            </div>
-                                                        </div>
-                                                        <template v-else>
-                                                            <div class="flex flex-wrap items-center gap-2">
-                                                                <Button type="button" size="sm" variant="outline" class="!py-1.5 !text-xs" :disabled="moduleThumbnailUploading" @click="moduleThumbnailFileInput?.click()">
-                                                                    {{ moduleThumbnailUploading ? 'Enviando…' : 'Enviar capa' }}
-                                                                </Button>
-                                                                <span class="text-xs text-zinc-500 dark:text-zinc-400">{{ section.cover_mode === 'horizontal' ? 'Recomendado: 1200×630 px (banner).' : 'Recomendado: 400×600 px (vertical).' }} Máx. {{ uploadLimits.image_max_mb }} MB.</span>
-                                                            </div>
-                                                        </template>
-                                                    </div>
-                                                </div>
-                                            </template>
-                                        </template>
-                                        <p v-if="!section.modules?.length" class="ml-4 mt-2 text-xs text-zinc-400 dark:text-zinc-500">Nenhum módulo. Clique em + Módulo.</p>
-                                    </div>
+                                <div v-if="produto.product_users?.length" class="rounded-xl border border-zinc-200 bg-zinc-50/50 p-4 dark:border-zinc-600 dark:bg-zinc-800/30">
+                                    <h3 class="mb-1 text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Alunos com acesso</h3>
+                                    <p class="mb-3 text-xs text-zinc-500 dark:text-zinc-400">Usuários com acesso a esta área (Produtos → Alunos).</p>
+                                    <ul class="max-h-44 space-y-1.5 overflow-y-auto text-xs text-zinc-600 dark:text-zinc-400">
+                                        <li v-for="a in produto.product_users" :key="a.id" class="truncate rounded-md py-1 px-2 hover:bg-zinc-100 dark:hover:bg-zinc-700/50">{{ a.name || a.email }} · {{ a.email }}</li>
+                                    </ul>
                                 </div>
-                            </template>
-                            <p v-if="!produto.modules?.length" class="col-span-full rounded-lg border border-dashed border-zinc-300 py-6 text-center text-sm text-zinc-500 dark:border-zinc-600 dark:text-zinc-400">Nenhum módulo. Clique em &quot;Novo módulo&quot; para começar.</p>
-                        </div>
                             </div>
-
-                            <!-- Backdrop mobile: fecha o sidebar ao clicar (só abaixo de lg) -->
-                            <div
-                                v-if="modulosSelectedModuleId"
-                                class="fixed inset-0 z-30 bg-black/50 lg:hidden"
-                                aria-hidden="true"
-                                @click="modulosSelectedModuleId = null; closeModulosLessonForm()"
-                            />
-
-                            <!-- Sidebar direito: aulas do módulo + formulário (overlay no mobile, coluna no lg) -->
-                            <aside
-                                v-if="modulosSelectedModuleId"
-                                class="fixed inset-y-0 right-0 z-40 flex w-full max-w-[20rem] flex-col rounded-l-xl border-l border-zinc-200 bg-white shadow-xl dark:border-zinc-700 dark:bg-zinc-900 lg:static lg:inset-auto lg:max-w-none lg:w-64 lg:min-h-0 lg:shrink-0 lg:rounded-l-lg lg:border-t lg:border-zinc-200 lg:bg-zinc-50/50 lg:shadow-none dark:lg:bg-zinc-800/30 lg:min-h-[20rem] lg:border-l lg:border-t-0"
-                            >
-                                <div class="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto p-4">
-                                    <div class="mb-3 flex items-center justify-between gap-2">
-                                        <h3 class="text-sm font-semibold text-zinc-800 dark:text-zinc-200">Aulas do módulo</h3>
-                                        <button type="button" class="rounded p-1 text-zinc-500 hover:bg-zinc-200 hover:text-zinc-700 dark:hover:bg-zinc-600 dark:hover:text-zinc-300" title="Fechar" @click="modulosSelectedModuleId = null; closeModulosLessonForm()"><X class="h-4 w-4" /></button>
-                                    </div>
-                                    <p v-if="modulosSelectedModule" class="mb-3 truncate text-xs text-zinc-500 dark:text-zinc-400">{{ modulosSelectedModule.title }}</p>
-
-                                    <template v-if="!modulosLessonForm">
-                                        <ul class="space-y-1">
-                                            <li
-                                                v-for="lesson in (modulosSelectedModule?.lessons ?? [])"
-                                                :key="lesson.id"
-                                                class="flex cursor-pointer items-center justify-between gap-2 rounded-lg py-2 px-2 text-sm transition hover:bg-zinc-200/80 dark:hover:bg-zinc-700/50"
-                                                @click="openModulosLessonForm(lesson)"
-                                            >
-                                                <span class="flex min-w-0 flex-1 items-center gap-2 truncate">
-                                                    <FileVideo v-if="lesson.type === 'video'" class="h-4 w-4 shrink-0 text-zinc-500" />
-                                                    <Link v-else-if="lesson.type === 'link'" class="h-4 w-4 shrink-0 text-zinc-500" />
-                                                    <Presentation v-else-if="lesson.type === 'pdf_presentation'" class="h-4 w-4 shrink-0 text-zinc-500" />
-                                                    <BookOpen v-else-if="lesson.type === 'pdf_reader'" class="h-4 w-4 shrink-0 text-zinc-500" />
-                                                    <FileText v-else-if="lesson.type === 'pdf'" class="h-4 w-4 shrink-0 text-zinc-500" />
-                                                    <FileText v-else class="h-4 w-4 shrink-0 text-zinc-500" />
-                                                    <span class="truncate text-zinc-700 dark:text-zinc-300">{{ lesson.title || 'Sem título' }}</span>
+                            <!-- Coluna direita: lista de turmas -->
+                            <div class="min-w-0 flex-1">
+                                <div class="space-y-4">
+                                    <div
+                                        v-for="t in produto.turmas"
+                                        :key="t.id"
+                                        class="rounded-xl border border-zinc-200 bg-white shadow-sm transition dark:border-zinc-600 dark:bg-zinc-800/50 dark:shadow-none"
+                                    >
+                                        <div class="flex flex-wrap items-center justify-between gap-2 border-b border-zinc-100 px-4 py-3 dark:border-zinc-600/80">
+                                            <div class="flex min-w-0 items-center gap-2">
+                                                <span class="min-w-0 truncate font-semibold text-zinc-900 dark:text-zinc-100">{{ t.name }}</span>
+                                                <span class="shrink-0 rounded-full bg-zinc-100 px-2.5 py-0.5 text-xs font-medium text-zinc-600 dark:bg-zinc-700 dark:text-zinc-300">
+                                                    {{ (t.users ?? []).length }} {{ (t.users ?? []).length === 1 ? 'aluno' : 'alunos' }}
                                                 </span>
-                                                <button type="button" class="shrink-0 rounded p-1 text-zinc-500 hover:bg-zinc-200/80 hover:text-zinc-700 dark:hover:bg-zinc-700/50 dark:hover:text-zinc-200" title="Duplicar aula" @click.stop="duplicateLesson(lesson.id)"><Copy class="h-3 w-3" /></button>
-                                                <button type="button" class="shrink-0 rounded p-1 text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30" title="Remover aula" @click.stop="deleteLesson(lesson.id)"><Trash2 class="h-3 w-3" /></button>
-                                            </li>
-                                        </ul>
-                                        <p v-if="!modulosSelectedModule?.lessons?.length" class="py-3 text-xs text-zinc-500 dark:text-zinc-400">Nenhuma aula neste módulo.</p>
-                                        <Button size="sm" class="mt-3 w-full" @click="openModulosLessonForm(null)">
-                                            <Plus class="mr-2 h-4 w-4" />
-                                            Nova aula
-                                        </Button>
-                                    </template>
-
-                                    <template v-else>
-                                        <div class="space-y-3">
-                                            <div>
-                                                <label class="mb-1 block text-xs font-medium text-zinc-600 dark:text-zinc-400">Título</label>
-                                                <input v-model="modulosLessonForm.title" type="text" :class="inputClass" class="w-full" placeholder="Título da aula" />
                                             </div>
-                                            <div>
-                                                <label class="mb-1 block text-xs font-medium text-zinc-600 dark:text-zinc-400">Tipo</label>
-                                                <select v-model="modulosLessonForm.type" :class="inputClass" class="w-full">
-                                                    <option value="video">Vídeo</option>
-                                                    <option value="link">Link</option>
-                                                    <option value="pdf">Material</option>
-                                                    <option value="pdf_presentation">Apresentação (PDF)</option>
-                                                    <option value="pdf_reader">Leitor de PDF</option>
-                                                    <option value="text">Texto</option>
-                                                </select>
-                                            </div>
-                                            <div>
-                                                <label class="mb-1 block text-xs font-medium text-zinc-600 dark:text-zinc-400">Liberação</label>
-                                                <div class="grid gap-2">
-                                                    <select v-model="modulosLessonForm.release_mode" :class="inputClass" class="w-full">
-                                                        <option value="none">Imediata</option>
-                                                        <option value="days">Após X dias</option>
-                                                        <option value="date">Na data</option>
-                                                    </select>
-                                                    <input
-                                                        v-if="modulosLessonForm.release_mode === 'days'"
-                                                        v-model="modulosLessonForm.release_after_days"
-                                                        type="number"
-                                                        min="1"
-                                                        step="1"
-                                                        :class="inputClass"
-                                                        class="w-full"
-                                                        placeholder="Ex.: 7"
-                                                    />
-                                                    <input
-                                                        v-else-if="modulosLessonForm.release_mode === 'date'"
-                                                        v-model="modulosLessonForm.release_at_date"
-                                                        type="date"
-                                                        :class="inputClass"
-                                                        class="w-full"
-                                                    />
-                                                </div>
-                                            </div>
-                                            <div v-if="modulosLessonForm.type === 'link'">
-                                                <label class="mb-1 block text-xs font-medium text-zinc-600 dark:text-zinc-400">Título do link</label>
-                                                <input v-model="modulosLessonForm.link_title" type="text" :class="inputClass" class="w-full" placeholder="Ex: Abrir material complementar" />
-                                            </div>
-                                            <div
-                                                v-if="
-                                                    modulosLessonForm.type === 'video' ||
-                                                    modulosLessonForm.type === 'link' ||
-                                                    isLessonPdfContentType(modulosLessonForm.type)
-                                                "
-                                            >
-                                                <label class="mb-1 block text-xs font-medium text-zinc-600 dark:text-zinc-400">URL do conteúdo</label>
-                                                <input v-model="modulosLessonForm.content_url" type="url" :class="inputClass" class="w-full" placeholder="https://..." />
-                                                <p v-if="modulosLessonForm.type === 'video'" class="mt-1.5 text-xs text-zinc-500 dark:text-zinc-400">
-                                                    Aceita links do YouTube, Vimeo, Wistia, Loom e outras plataformas de vídeo compatíveis.
-                                                </p>
-                                            </div>
-                                            <div v-if="modulosLessonForm.type === 'text'">
-                                                <label class="mb-1 block text-xs font-medium text-zinc-600 dark:text-zinc-400">Texto</label>
-                                                <textarea v-model="modulosLessonForm.content_text" :class="inputClass" class="w-full" rows="3" placeholder="Conteúdo da aula..." />
-                                            </div>
-                                            <div v-if="isLessonPdfContentType(modulosLessonForm.type)" class="space-y-2">
-                                                <input ref="lessonPdfFileInput" type="file" accept=".pdf,application/pdf" multiple class="hidden" @change="onLessonPdfChange" />
-                                                <label class="block text-xs font-medium text-zinc-600 dark:text-zinc-400">
-                                                    {{
-                                                        modulosLessonForm.type === 'pdf_presentation'
-                                                            ? 'Arquivos da apresentação'
-                                                            : modulosLessonForm.type === 'pdf_reader'
-                                                              ? 'Arquivos do leitor'
-                                                              : 'Materiais PDF'
-                                                    }}
-                                                </label>
-                                                <div class="flex flex-wrap items-center gap-2">
-                                                    <Button type="button" size="sm" variant="outline" :disabled="lessonPdfUploading" @click="lessonPdfFileInput?.click()">
-                                                        {{
-                                                            lessonPdfUploading
-                                                                ? 'Enviando…'
-                                                                : modulosLessonForm.type === 'pdf'
-                                                                  ? 'Selecionar materiais'
-                                                                  : 'Selecionar PDFs'
-                                                        }}
-                                                    </Button>
-                                                    <span v-if="(modulosLessonForm.content_files?.length ?? 0) > 0" class="text-xs text-zinc-500 dark:text-zinc-400">
-                                                        {{ modulosLessonForm.content_files.length }} arquivo(s)
-                                                    </span>
-                                                    <button v-if="(modulosLessonForm.content_files?.length ?? 0) > 0" type="button" class="text-xs text-red-600 hover:underline" @click="clearLessonPdf">Remover todos</button>
-                                                </div>
-                                                <div v-if="(modulosLessonForm.content_files?.length ?? 0) > 0" class="space-y-1">
-                                                    <div
-                                                        v-for="(f, i) in modulosLessonForm.content_files"
-                                                        :key="`${f.url}-${i}`"
-                                                        class="flex items-center justify-between gap-2 rounded-md border border-zinc-200 bg-white px-2 py-1 text-xs dark:border-zinc-700 dark:bg-zinc-800/50"
-                                                    >
-                                                        <span class="min-w-0 flex-1 truncate text-zinc-600 dark:text-zinc-300">{{ f.name || pdfLessonFileLabel(modulosLessonForm.type) }}</span>
-                                                        <button type="button" class="shrink-0 text-red-600 hover:underline" @click="removeLessonPdfAt(i)">Remover</button>
-                                                    </div>
-                                                </div>
-                                                <p class="text-xs text-zinc-500 dark:text-zinc-400">
-                                                    Máx. {{ uploadLimits.pdf_max_mb }} MB por arquivo.
-                                                    A página antes do PDF (visão geral, links) é configurada na aba
-                                                    <button type="button" class="font-semibold text-sky-700 underline dark:text-sky-300" @click="activeTab = 'introducao'">
-                                                        Introdução
-                                                    </button>.
-                                                </p>
-                                            </div>
-                                            <div
-                                                v-else-if="
-                                                    modulosLessonForm.type === 'video' || modulosLessonForm.type === 'link'
-                                                "
-                                            >
-                                                <label class="mb-1 block text-xs font-medium text-zinc-600 dark:text-zinc-400">Descrição</label>
-                                                <textarea
-                                                    v-model="modulosLessonForm.content_text"
-                                                    :class="inputClass"
-                                                    class="w-full"
-                                                    rows="3"
-                                                    placeholder="Texto ou links para complementar a aula (opcional)..."
-                                                />
-                                            </div>
-                                            <div v-if="modulosLessonForm.type === 'video'" class="rounded-lg border border-zinc-200 bg-white p-3 dark:border-zinc-700 dark:bg-zinc-800/50">
-                                                <div class="flex items-center">
-                                                    <Toggle v-model="modulosLessonForm.watermark_enabled" label="Marca d'água (proteção DRM)" />
-                                                </div>
-                                            </div>
-                                            <div class="flex gap-2">
-                                                <Button variant="outline" size="sm" class="flex-1" @click="closeModulosLessonForm">Cancelar</Button>
-                                                <Button size="sm" class="flex-1" :disabled="modulosLessonFormSaving" @click="saveLessonFromSidebar">{{ modulosLessonFormSaving ? 'Salvando…' : 'Salvar' }}</Button>
+                                            <div class="flex shrink-0 items-center gap-1">
+                                                <button type="button" class="rounded-lg p-2 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-700 dark:hover:bg-zinc-700 dark:hover:text-zinc-300" title="Editar turma" @click="openEditTurma(t)"><Pencil class="h-4 w-4" /></button>
+                                                <button type="button" class="rounded-lg p-2 text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30" title="Remover turma" @click="deleteTurma(t.id)"><Trash2 class="h-4 w-4" /></button>
                                             </div>
                                         </div>
-                                    </template>
+                                        <div class="p-4">
+                                            <ul class="space-y-2">
+                                                <li
+                                                    v-for="u in (t.users ?? [])"
+                                                    :key="u.id"
+                                                    class="flex items-center justify-between gap-3 rounded-lg border border-zinc-100 bg-zinc-50/80 py-2.5 px-3 text-sm dark:border-zinc-700/50 dark:bg-zinc-800/30"
+                                                >
+                                                    <span class="min-w-0 truncate font-medium text-zinc-800 dark:text-zinc-200">{{ u.name || u.email }}</span>
+                                                    <button type="button" class="shrink-0 rounded-md px-2 py-1 text-xs font-medium text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30" @click="detachTurmaUser(t.id, u.id)">Remover</button>
+                                                </li>
+                                            </ul>
+                                            <div v-if="!t.users?.length" class="rounded-lg border border-dashed border-zinc-200 py-6 text-center text-sm text-zinc-500 dark:border-zinc-600 dark:text-zinc-400">Nenhum aluno nesta turma.</div>
+                                            <div class="mt-3">
+                                                <Button size="sm" variant="outline" class="w-full sm:w-auto" @click.stop="openAddAlunoModal(t)">
+                                                    <Plus class="mr-1.5 h-3.5 w-3.5" />
+                                                    Adicionar aluno
+                                                </Button>
+                                                <p v-if="!alunosDisponiveisParaTurma(t).length && produto.product_users?.length" class="mt-2 text-xs text-zinc-500 dark:text-zinc-400">Todos os alunos já estão nesta turma.</p>
+                                                <p v-if="!produto.product_users?.length" class="mt-2 text-xs text-zinc-500 dark:text-zinc-400">Nenhum aluno com acesso. Adicione em Produtos → Alunos.</p>
+                                            </div>
+                                        </div>
+                                    </div>
                                 </div>
-                            </aside>
+                                <div v-if="!produto.turmas?.length" class="rounded-xl border border-dashed border-zinc-200 py-12 text-center dark:border-zinc-600">
+                                    <Users class="mx-auto h-12 w-12 text-zinc-300 dark:text-zinc-600" />
+                                    <p class="mt-3 text-sm font-medium text-zinc-600 dark:text-zinc-400">Nenhuma turma ainda</p>
+                                    <p class="mt-1 text-xs text-zinc-500 dark:text-zinc-400">Crie uma turma para organizar os alunos.</p>
+                                    <Button size="sm" class="mt-4" @click="addTurma">
+                                        <Plus class="mr-2 h-4 w-4" />
+                                        Nova turma
+                                    </Button>
+                                </div>
+                            </div>
                         </div>
-
                     </template>
 
                     <template v-else-if="activeTab === 'turmas'">
@@ -2690,228 +2331,80 @@ const inputClass = 'block w-full rounded-lg border border-zinc-300 bg-white px-3
                         </div>
                     </template>
 
-                    <template v-else-if="activeTab === 'introducao'">
-                        <div class="flex min-h-[28rem] flex-col gap-4 lg:flex-row lg:gap-6">
-                            <div class="flex min-h-0 w-full shrink-0 flex-col lg:w-72 xl:w-80">
-                                <div class="mb-3">
-                                    <h2 class="text-sm font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
-                                        Introdução das aulas
-                                    </h2>
-                                    <p class="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
-                                        Uma página antes do PDF por aula (Material, Apresentação ou Leitor). Escolha a aula para personalizar.
-                                    </p>
-                                </div>
-                                <div
-                                    v-if="!pdfLessonsForIntro.length"
-                                    class="rounded-xl border border-dashed border-zinc-300 px-4 py-8 text-center text-sm text-zinc-500 dark:border-zinc-600 dark:text-zinc-400"
-                                >
-                                    Nenhuma aula em PDF neste produto. Crie aulas do tipo Material, Apresentação ou Leitor de PDF na aba Módulos.
-                                </div>
-                                <ul v-else class="min-h-0 flex-1 space-y-1 overflow-y-auto rounded-xl border border-zinc-200 bg-zinc-50/50 p-2 dark:border-zinc-700 dark:bg-zinc-800/30">
-                                    <li v-for="entry in pdfLessonsForIntro" :key="entry.lesson.id">
-                                        <button
-                                            type="button"
-                                            class="flex w-full flex-col items-start gap-0.5 rounded-lg px-3 py-2.5 text-left text-sm transition"
-                                            :class="
-                                                introSelectedLessonId == entry.lesson.id
-                                                    ? 'bg-sky-600 text-white shadow-sm dark:bg-sky-500'
-                                                    : 'text-zinc-700 hover:bg-white dark:text-zinc-200 dark:hover:bg-zinc-700/60'
-                                            "
-                                            @click="openIntroEditor(entry)"
-                                        >
-                                            <span class="line-clamp-2 font-semibold">{{ entry.lesson.title || 'Sem título' }}</span>
-                                            <span
-                                                class="text-[11px]"
-                                                :class="
-                                                    introSelectedLessonId == entry.lesson.id
-                                                        ? 'text-sky-100'
-                                                        : 'text-zinc-500 dark:text-zinc-400'
-                                                "
-                                            >
-                                                {{ entry.moduleTitle }} · {{ introLessonTypeLabel(entry.lesson.type) }}
-                                            </span>
-                                            <span
-                                                v-if="entry.isConfigured"
-                                                class="mt-0.5 rounded px-1.5 py-0.5 text-[10px] font-medium"
-                                                :class="
-                                                    introSelectedLessonId == entry.lesson.id
-                                                        ? 'bg-sky-500/80 text-white'
-                                                        : 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-200'
-                                                "
-                                            >
-                                                Configurada
-                                            </span>
-                                        </button>
-                                    </li>
-                                </ul>
+                    <template v-else-if="activeTab === 'avaliacoes'">
+                        <div class="space-y-6">
+                            <div>
+                                <h2 class="mb-1 text-sm font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Avaliações das aulas (PDF)</h2>
+                                <p class="text-xs text-zinc-500 dark:text-zinc-400">
+                                    Estrelas enviadas pelos alunos no leitor de PDF (1 a 5). Apenas aulas em formato PDF, apresentação ou leitor completo.
+                                </p>
                             </div>
-
-                            <div class="min-h-0 min-w-0 flex-1 rounded-xl border border-zinc-200 bg-white dark:border-zinc-700 dark:bg-zinc-900/40">
-                                <div v-if="!introEditorForm" class="flex h-full min-h-[20rem] flex-col items-center justify-center p-8 text-center">
-                                    <BookOpen class="h-12 w-12 text-zinc-300 dark:text-zinc-600" />
-                                    <p class="mt-3 text-sm font-medium text-zinc-600 dark:text-zinc-300">Selecione uma aula à esquerda</p>
-                                    <p class="mt-1 max-w-sm text-xs text-zinc-500 dark:text-zinc-400">
-                                        Você define visão geral, links e comentários (se ativos) para a tela que o aluno vê antes de abrir o PDF.
-                                    </p>
+                            <div class="flex flex-wrap gap-4 rounded-xl border border-zinc-200 bg-zinc-50/50 px-4 py-3 text-sm dark:border-zinc-600 dark:bg-zinc-800/30">
+                                <div>
+                                    <span class="text-zinc-500 dark:text-zinc-400">Aulas PDF no curso</span>
+                                    <p class="text-lg font-semibold text-zinc-900 dark:text-zinc-100">{{ lessonRatingsRows.length }}</p>
                                 </div>
-                                <div v-else class="flex h-full min-h-0 flex-col">
-                                    <div class="shrink-0 border-b border-zinc-200 px-4 py-3 dark:border-zinc-700">
-                                        <p class="text-[11px] font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
-                                            {{ introEditorForm.moduleTitle }}
-                                        </p>
-                                        <h3 class="text-base font-bold text-zinc-900 dark:text-zinc-100">
-                                            {{ introEditorForm.lessonTitle }}
-                                        </h3>
-                                        <p class="mt-0.5 text-xs text-zinc-500 dark:text-zinc-400">
-                                            {{ introLessonTypeLabel(introEditorForm.lessonType) }}
-                                        </p>
-                                    </div>
-                                    <nav class="flex shrink-0 gap-0.5 overflow-x-auto border-b border-zinc-200 px-2 dark:border-zinc-700">
-                                        <button
-                                            type="button"
-                                            class="flex shrink-0 items-center gap-1 border-b-2 px-3 py-2.5 text-xs font-semibold transition"
-                                            :class="
-                                                introEditorTab === 'overview'
-                                                    ? 'border-sky-600 text-sky-800 dark:border-sky-400 dark:text-sky-200'
-                                                    : 'border-transparent text-zinc-500 hover:text-zinc-700'
-                                            "
-                                            @click="introEditorTab = 'overview'"
-                                        >
-                                            Visão geral
-                                        </button>
-                                        <button
-                                            type="button"
-                                            class="flex shrink-0 items-center gap-1 border-b-2 px-3 py-2.5 text-xs font-semibold transition"
-                                            :class="
-                                                introEditorTab === 'download'
-                                                    ? 'border-sky-600 text-sky-800 dark:border-sky-400 dark:text-sky-200'
-                                                    : 'border-transparent text-zinc-500 hover:text-zinc-700'
-                                            "
-                                            @click="introEditorTab = 'download'"
-                                        >
-                                            <Download class="h-3.5 w-3.5" />
-                                            Baixar PDF
-                                        </button>
-                                        <button
-                                            type="button"
-                                            class="flex shrink-0 items-center gap-1 border-b-2 px-3 py-2.5 text-xs font-semibold transition"
-                                            :class="
-                                                introEditorTab === 'links'
-                                                    ? 'border-sky-600 text-sky-800 dark:border-sky-400 dark:text-sky-200'
-                                                    : 'border-transparent text-zinc-500 hover:text-zinc-700'
-                                            "
-                                            @click="introEditorTab = 'links'"
-                                        >
-                                            <Link2 class="h-3.5 w-3.5" />
-                                            Links
-                                        </button>
-                                        <button
-                                            type="button"
-                                            class="flex shrink-0 items-center gap-1 border-b-2 px-3 py-2.5 text-xs font-semibold transition"
-                                            :class="
-                                                introEditorTab === 'comments'
-                                                    ? 'border-sky-600 text-sky-800 dark:border-sky-400 dark:text-sky-200'
-                                                    : 'border-transparent text-zinc-500 hover:text-zinc-700'
-                                            "
-                                            @click="introEditorTab = 'comments'"
-                                        >
-                                            <MessageSquare class="h-3.5 w-3.5" />
-                                            Comentar
-                                        </button>
-                                    </nav>
-                                    <div class="min-h-0 flex-1 overflow-y-auto p-4">
-                                        <div v-show="introEditorTab === 'overview'" class="space-y-2">
-                                            <label class="block text-xs font-medium text-zinc-600 dark:text-zinc-400">Texto da visão geral</label>
-                                            <textarea
-                                                v-model="introEditorForm.content_text"
-                                                :class="inputClass"
-                                                class="w-full"
-                                                rows="10"
-                                                placeholder="Resumo da aula: o que o aluno vai aprender, artigos de lei, dicas..."
-                                            />
-                                            <p class="text-xs text-zinc-500 dark:text-zinc-400">
-                                                O aluno lê isso na primeira tela, antes de abrir o leitor ou a apresentação.
-                                            </p>
-                                        </div>
-                                        <div v-show="introEditorTab === 'download'" class="space-y-3">
-                                            <p class="text-sm text-zinc-600 dark:text-zinc-400">
-                                                Os arquivos PDF desta aula são enviados na aba <strong>Módulos</strong> (edição da aula).
-                                            </p>
-                                            <p class="text-xs text-zinc-500 dark:text-zinc-400">
-                                                Esta aula tem
-                                                <strong>{{ introEditorForm.fileCount || 0 }}</strong>
-                                                arquivo(s) PDF configurado(s). O aluno vê a lista na aba &quot;Baixar PDF&quot; da introdução.
-                                            </p>
-                                            <Button type="button" size="sm" variant="outline" @click="goToModulosForIntroFiles">
-                                                Editar PDFs na aba Módulos
-                                            </Button>
-                                        </div>
-                                        <div v-show="introEditorTab === 'links'" class="space-y-2">
-                                            <div class="flex items-center justify-between gap-2">
-                                                <label class="text-xs font-medium text-zinc-600 dark:text-zinc-400">Links úteis</label>
-                                                <Button
-                                                    type="button"
-                                                    size="sm"
-                                                    variant="outline"
-                                                    :disabled="(introEditorForm.resource_links?.length ?? 0) >= 20"
-                                                    @click="addIntroResourceLink"
-                                                >
-                                                    <Plus class="mr-1 h-3.5 w-3.5" />
-                                                    Adicionar
-                                                </Button>
-                                            </div>
-                                            <div
-                                                v-if="!(introEditorForm.resource_links?.length)"
-                                                class="rounded-md border border-dashed border-zinc-300 px-3 py-4 text-center text-xs text-zinc-500 dark:border-zinc-600"
-                                            >
-                                                Nenhum link. Ex.: Planalto, YouTube, jurisprudência.
-                                            </div>
-                                            <div
-                                                v-for="(link, linkIdx) in introEditorForm.resource_links"
-                                                :key="linkIdx"
-                                                class="flex flex-col gap-2 rounded-lg border border-zinc-200 bg-zinc-50 p-3 dark:border-zinc-700 dark:bg-zinc-800/50"
-                                            >
-                                                <input v-model="link.title" type="text" :class="inputClass" placeholder="Título do link" />
-                                                <div class="flex gap-2">
-                                                    <input v-model="link.url" type="url" :class="inputClass" class="min-w-0 flex-1" placeholder="https://..." />
-                                                    <button
-                                                        type="button"
-                                                        class="shrink-0 rounded-md p-2 text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30"
-                                                        @click="removeIntroResourceLinkAt(linkIdx)"
-                                                    >
-                                                        <Trash2 class="h-4 w-4" />
-                                                    </button>
-                                                </div>
-                                            </div>
-                                        </div>
-                                        <div v-show="introEditorTab === 'comments'" class="space-y-2">
-                                            <p class="text-xs text-zinc-600 dark:text-zinc-400">
-                                                Se ativados no produto, o aluno comenta nesta aula na aba Comentar da introdução.
-                                            </p>
-                                            <div
-                                                class="rounded-lg border px-3 py-2 text-xs"
-                                                :class="
-                                                    configForm.member_area_config.comments_enabled
-                                                        ? 'border-emerald-200 bg-emerald-50 text-emerald-900 dark:border-emerald-900/40 dark:bg-emerald-950/30'
-                                                        : 'border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-900/40 dark:bg-amber-950/30'
-                                                "
-                                            >
-                                                <template v-if="configForm.member_area_config.comments_enabled">
-                                                    Comentários <strong>ativados</strong> para este produto.
-                                                </template>
-                                                <template v-else>
-                                                    Comentários <strong>desativados</strong>.
-                                                    <button type="button" class="font-semibold underline" @click="activeTab = 'comentarios'">Ativar na aba Comentários</button>
-                                                </template>
-                                            </div>
-                                        </div>
-                                    </div>
-                                    <div class="shrink-0 border-t border-zinc-200 p-4 dark:border-zinc-700">
-                                        <Button class="w-full sm:w-auto" :disabled="introEditorSaving" @click="saveIntroEditor">
-                                            {{ introEditorSaving ? 'Salvando…' : 'Salvar introdução desta aula' }}
-                                        </Button>
-                                    </div>
+                                <div class="hidden h-10 w-px bg-zinc-200 dark:bg-zinc-600 sm:block" aria-hidden="true" />
+                                <div>
+                                    <span class="text-zinc-500 dark:text-zinc-400">Com pelo menos 1 avaliação</span>
+                                    <p class="text-lg font-semibold text-zinc-900 dark:text-zinc-100">{{ lessonRatingsWithVotes.length }}</p>
                                 </div>
+                            </div>
+                            <div
+                                v-if="!lessonRatingsRows.length"
+                                class="rounded-xl border border-dashed border-zinc-200 py-12 text-center dark:border-zinc-600"
+                            >
+                                <Star class="mx-auto h-12 w-12 text-zinc-300 dark:text-zinc-600" />
+                                <p class="mt-3 text-sm font-medium text-zinc-600 dark:text-zinc-400">Nenhuma aula PDF cadastrada</p>
+                                <p class="mt-1 text-xs text-zinc-500 dark:text-zinc-400">Adicione aulas PDF na aba Módulos para receber avaliações.</p>
+                            </div>
+                            <div
+                                v-else-if="!lessonRatingsWithVotes.length"
+                                class="rounded-xl border border-dashed border-amber-200 bg-amber-50/50 px-4 py-8 text-center text-sm text-amber-900 dark:border-amber-900/40 dark:bg-amber-950/20 dark:text-amber-200"
+                            >
+                                Ainda não há avaliações. Os alunos podem avaliar na barra abaixo do PDF na área do membro.
+                            </div>
+                            <div v-else class="space-y-4">
+                                <article
+                                    v-for="lesson in lessonRatingsWithVotes"
+                                    :key="lesson.id"
+                                    class="overflow-hidden rounded-xl border border-zinc-200 dark:border-zinc-600"
+                                >
+                                    <div class="flex flex-wrap items-start justify-between gap-3 border-b border-zinc-100 bg-zinc-50/80 px-4 py-3 dark:border-zinc-700 dark:bg-zinc-800/40">
+                                        <div class="min-w-0">
+                                            <h3 class="font-semibold text-zinc-900 dark:text-zinc-100">{{ lesson.title }}</h3>
+                                            <p v-if="lesson.module_title" class="text-xs text-zinc-500 dark:text-zinc-400">{{ lesson.module_title }}</p>
+                                        </div>
+                                        <div class="flex shrink-0 items-center gap-2 text-sm">
+                                            <Star class="h-4 w-4 fill-amber-400 text-amber-400" />
+                                            <span class="font-semibold text-zinc-900 dark:text-zinc-100">{{ formatRatingStars(lesson.average) }}</span>
+                                            <span class="text-zinc-500 dark:text-zinc-400">({{ lesson.ratings_count }} {{ lesson.ratings_count === 1 ? 'avaliação' : 'avaliações' }})</span>
+                                        </div>
+                                    </div>
+                                    <ul v-if="lesson.recent?.length" class="divide-y divide-zinc-100 dark:divide-zinc-700/80">
+                                        <li
+                                            v-for="(r, idx) in lesson.recent"
+                                            :key="idx"
+                                            class="flex flex-wrap items-center justify-between gap-2 bg-white px-4 py-2.5 text-sm dark:bg-zinc-900/40"
+                                        >
+                                            <div class="min-w-0">
+                                                <span class="font-medium text-zinc-800 dark:text-zinc-200">{{ r.user_name }}</span>
+                                                <span v-if="r.user_email" class="ml-2 text-xs text-zinc-500">{{ r.user_email }}</span>
+                                            </div>
+                                            <div class="flex items-center gap-3 text-zinc-600 dark:text-zinc-400">
+                                                <span class="inline-flex items-center gap-0.5" :title="`${r.rating} de 5`">
+                                                    <Star
+                                                        v-for="n in 5"
+                                                        :key="n"
+                                                        class="h-3.5 w-3.5"
+                                                        :class="n <= r.rating ? 'fill-amber-400 text-amber-400' : 'text-zinc-300 dark:text-zinc-600'"
+                                                    />
+                                                </span>
+                                                <span v-if="r.updated_at" class="text-xs">{{ r.updated_at }}</span>
+                                            </div>
+                                        </li>
+                                    </ul>
+                                </article>
                             </div>
                         </div>
                     </template>
@@ -3524,7 +3017,7 @@ const inputClass = 'block w-full rounded-lg border border-zinc-300 bg-white px-3
                         :mode="previewMode"
                         :config="configForm.member_area_config"
                         :product-name="produto.name"
-                        :sections="produto.modules ?? []"
+                        :sections="builderModules"
                         :internal-products="produto.internal_products ?? []"
                         :progress-percent="0"
                         :continue-watching="null"
@@ -4217,5 +3710,21 @@ const inputClass = 'block w-full rounded-lg border border-zinc-300 bg-white px-3
                 </div>
             </div>
         </Teleport>
+
+        <PdfLibraryModal
+            :open="pdfLibraryOpen"
+            :mode="pdfLibraryMode"
+            :index-url="pdfLibraryIndexUrl"
+            :upload-url="pdfLibraryUploadUrl"
+            :folders-url="pdfLibraryFoldersUrl"
+            :delete-url-base="pdfLibraryDeleteBase"
+            :pdf-max-mb="uploadLimits.pdf_max_mb"
+            :csrf-token="csrfToken()"
+            :current-product-id="String(produto.id)"
+            :tenant-products="tenant_products"
+            @close="pdfLibraryOpen = false"
+            @select="onLibraryPdfsSelected"
+        />
     </div>
 </template>
+

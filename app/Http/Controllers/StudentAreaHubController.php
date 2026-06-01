@@ -5,12 +5,14 @@ namespace App\Http\Controllers;
 use App\Http\Controllers\Concerns\BuildsCommunityPagePayload;
 use App\Http\Controllers\Concerns\SharesStudentSupportProps;
 use App\Models\MemberCertificateIssued;
+use App\Models\MemberLessonBookmark;
 use App\Models\MemberCommunityPage;
 use App\Models\MemberCommunityPost;
 use App\Models\MemberCommunityPostComment;
 use App\Models\MemberCommunityPostLike;
 use App\Models\Product;
 use App\Services\GamificationService;
+use App\Services\MemberAreaResolver;
 use App\Services\MemberProgressService;
 use App\Services\StorageService;
 use App\Support\StudentAreaBranding;
@@ -289,6 +291,52 @@ class StudentAreaHubController extends Controller
 
         return Inertia::render('MemberArea/Conquistas', $this->hubProps($request, [
             'achievements' => $achievements,
+        ]));
+    }
+
+    public function savedLessons(Request $request): Response
+    {
+        $user = $request->user();
+        $tenantId = StudentAreaTenant::idForUser($user);
+        $resolver = app(MemberAreaResolver::class);
+
+        $bookmarks = MemberLessonBookmark::query()
+            ->where('user_id', $user->id)
+            ->with(['lesson.module:id,title', 'lesson.product:id,name,type,tenant_id,checkout_slug'])
+            ->orderByDesc('updated_at')
+            ->get();
+
+        $items = [];
+        foreach ($bookmarks as $bookmark) {
+            $lesson = $bookmark->lesson;
+            if (! $lesson) {
+                continue;
+            }
+            $product = $lesson->product;
+            if (! $product || $product->type !== Product::TYPE_AREA_MEMBROS) {
+                continue;
+            }
+            if ($tenantId && (int) $product->tenant_id !== (int) $tenantId) {
+                continue;
+            }
+            if (! $product->hasMemberAreaAccess($user)) {
+                continue;
+            }
+
+            $baseUrl = rtrim($resolver->baseUrlForProduct($product), '/');
+            $items[] = [
+                'lesson_id' => $lesson->id,
+                'lesson_title' => $lesson->title,
+                'module_title' => $lesson->module?->title,
+                'product_id' => $product->id,
+                'product_name' => $product->name,
+                'lesson_href' => $baseUrl.'/modulo/'.$lesson->member_module_id.'?aula='.$lesson->id,
+                'saved_at' => $bookmark->updated_at?->format('d/m/Y H:i'),
+            ];
+        }
+
+        return Inertia::render('MemberArea/SavedLessons', $this->hubProps($request, [
+            'saved_lessons' => $items,
         ]));
     }
 

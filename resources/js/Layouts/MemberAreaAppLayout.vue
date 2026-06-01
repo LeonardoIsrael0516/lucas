@@ -29,6 +29,12 @@ const hub_notifications_unread = computed(() => props.value?.notifications_unrea
 const hubSidebarCollapsed = ref(false);
 const hubMobileOpen = ref(false);
 
+/** Hub global (/area-membros) vive no APP_URL; na área /m/{slug} ou domínio próprio o path relativo quebra. */
+const hubCoursesHref = computed(() => {
+    const base = String(props.value?.app_url || '').replace(/\/$/, '');
+    return base ? `${base}/area-membros` : '/area-membros';
+});
+
 const user = computed(() => props.value?.auth?.user ?? null);
 const { showBackToPanel, backToPanelHref, backToPanelLabel } = useBackToPanelLink();
 const theme = computed(() => ({
@@ -518,6 +524,7 @@ watch(
             :hub_nav="hub_nav"
             :profile_href="profile_href"
             :suporte_href="suporte_href"
+            :courses_href="hubCoursesHref"
             active=""
             variant="navy"
             :show-sidebar-logout="false"
@@ -635,10 +642,12 @@ watch(
                         :hub_nav="hub_nav"
                         :profile_href="profile_href"
                         :suporte_href="suporte_href"
+                        :courses_href="hubCoursesHref"
                         active=""
                         variant="navy"
                         :show-sidebar-logout="false"
                         :show_collapse="false"
+                        @navigate="hubMobileOpen = false"
                     />
                     <button
                         type="button"

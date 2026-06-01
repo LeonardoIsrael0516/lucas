@@ -141,7 +141,7 @@ function lessonStatus(lesson, m) {
                                 class="group flex items-start gap-2 rounded-lg px-2 py-2 text-sm transition"
                                 :class="
                                     lessonStatus(lesson, m) === 'current'
-                                        ? 'bg-blue-50 ring-1 ring-blue-200'
+                                        ? 'bg-emerald-50 ring-1 ring-emerald-200'
                                         : 'hover:bg-[var(--lesson-bg)]'
                                 "
                                 @click="emit('close')"
@@ -152,7 +152,7 @@ function lessonStatus(lesson, m) {
                                 />
                                 <Play
                                     v-else-if="lessonStatus(lesson, m) === 'current'"
-                                    class="mt-0.5 h-4 w-4 shrink-0 fill-blue-600 text-blue-600"
+                                    class="mt-0.5 h-4 w-4 shrink-0 fill-emerald-600 text-emerald-600"
                                 />
                                 <span
                                     v-else
@@ -163,21 +163,15 @@ function lessonStatus(lesson, m) {
                                 <span class="min-w-0 flex-1">
                                     <span
                                         class="block truncate font-medium"
-                                        :class="lessonStatus(lesson, m) === 'current' ? 'text-blue-800' : 'text-[var(--lesson-text)]'"
+                                        :class="lessonStatus(lesson, m) === 'current' ? 'text-emerald-900' : 'text-[var(--lesson-text)]'"
                                     >
                                         {{ lesson.title || 'Sem título' }}
                                     </span>
                                     <span
-                                        v-if="lessonStatus(lesson, m) === 'current'"
-                                        class="mt-0.5 inline-block rounded px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-blue-700 bg-blue-100"
+                                        v-if="lessonStatus(lesson, m) === 'done'"
+                                        class="mt-0.5 inline-block text-[10px] font-semibold uppercase text-emerald-600"
                                     >
-                                        Em andamento
-                                    </span>
-                                    <span
-                                        v-else-if="lessonStatus(lesson, m) === 'done'"
-                                        class="mt-0.5 inline-block text-[10px] font-semibold text-emerald-600"
-                                    >
-                                        Concluído
+                                        Concluída
                                     </span>
                                     <span v-if="lesson.pages_count" class="mt-0.5 block text-[11px] text-[var(--lesson-text-3)]">
                                         {{ lesson.pages_count }} pág.

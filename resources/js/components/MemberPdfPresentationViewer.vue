@@ -3,6 +3,7 @@ import { ref, shallowRef, watch, onMounted, onUnmounted, computed, nextTick, def
 import * as pdfjsLib from 'pdfjs-dist';
 import PdfJsWorker from 'pdfjs-dist/build/pdf.worker.min.mjs?worker';
 import PdfJsWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
+import { loadPdfDocument } from '@/lib/pdfjsLoad';
 
 let pdfWorkerAvailable = !import.meta.env.DEV;
 pdfjsLib.GlobalWorkerOptions.workerSrc = PdfJsWorkerUrl;
@@ -26,12 +27,9 @@ function isWorkerBootstrapError(error) {
 }
 
 async function loadPdfDoc(url, forceMainThread = false) {
-    const task = pdfjsLib.getDocument({
-        url,
-        withCredentials: false,
+    return loadPdfDocument(url, {
         disableWorker: forceMainThread || !pdfWorkerAvailable,
     });
-    return task.promise;
 }
 
 const props = defineProps({
@@ -196,20 +194,22 @@ async function loadDocuments() {
     }
 
     try {
-        const docs = [];
-        let pages = 0;
-        for (const { url } of list) {
-            let pdf;
+        const loadOne = async (url) => {
             try {
-                pdf = await loadPdfDoc(url);
+                return await loadPdfDoc(url);
             } catch (firstError) {
-                if (!isWorkerBootstrapError(firstError)) throw firstError;
-                // Dev fallback: force load without worker when browser blocks cross-origin worker bootstrap.
+                if (!isWorkerBootstrapError(firstError)) {
+                    throw firstError;
+                }
                 pdfWorkerAvailable = false;
                 pdfjsLib.GlobalWorkerOptions.workerPort = null;
-                pdf = await loadPdfDoc(url, true);
+                return loadPdfDoc(url, true);
             }
-            docs.push(pdf);
+        };
+
+        const docs = await Promise.all(list.map(({ url }) => loadOne(url)));
+        let pages = 0;
+        for (const pdf of docs) {
             pages += pdf.numPages;
         }
         pdfDocs.value = docs;

@@ -2,8 +2,10 @@
 
 namespace App\Http\Middleware;
 
+use App\Models\MemberLessonBookmark;
 use App\Models\MemberNotification;
 use App\Models\MemberPushSubscription;
+use App\Models\User;
 use App\Models\PanelNotification;
 use App\Plugins\PluginRegistry;
 use App\Services\SalesAchievementsService;
@@ -105,6 +107,15 @@ class HandleInertiaRequests extends Middleware
             }
         }
 
+        $hasSavedLessons = false;
+        $savedLessonsHref = url('/area-membros/salvos');
+        if ($user && in_array($user->role, [User::ROLE_ALUNO, User::ROLE_ADMIN], true)) {
+            $hasSavedLessons = MemberLessonBookmark::query()
+                ->where('user_id', $user->id)
+                ->exists();
+            $savedLessonsHref = route('student-hub.saved');
+        }
+
         $loginBranding = null;
         if (! $user) {
             $routeName = $request->route()?->getName();
@@ -158,6 +169,8 @@ class HandleInertiaRequests extends Middleware
             'notifications_unread_count' => $notificationsUnreadCount,
             'member_notifications_unread_count' => $memberNotificationsUnreadCount,
             'member_push_subscribed' => $memberPushSubscribed,
+            'has_saved_lessons' => $hasSavedLessons,
+            'saved_lessons_href' => $savedLessonsHref,
         ];
 
         if (! $skipPanelPwa) {
@@ -206,6 +219,7 @@ class HandleInertiaRequests extends Middleware
             'student-hub.comunidade' => 'Comunidade',
             'student-hub.certificados' => 'Certificados',
             'student-hub.conquistas' => 'Conquistas',
+            'student-hub.saved' => 'Aulas salvas',
         ];
 
         return $name ? ($titles[$name] ?? null) : null;

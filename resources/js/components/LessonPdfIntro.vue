@@ -1,6 +1,6 @@
 <script setup>
 import { computed, ref, watch } from 'vue';
-import { Download, MessageCircle, Link2, BookOpen } from 'lucide-vue-next';
+import { AlignLeft, Paperclip, MessageCircle, Link2, BookOpen } from 'lucide-vue-next';
 import LessonResourceTabsContent from '@/components/LessonResourceTabsContent.vue';
 
 const props = defineProps({
@@ -8,6 +8,7 @@ const props = defineProps({
     lessonTitle: { type: String, default: '' },
     overviewHtml: { type: String, default: '' },
     downloadableFiles: { type: Array, default: () => [] },
+    attachmentFiles: { type: Array, default: () => [] },
     allowDownload: { type: Boolean, default: true },
     resourceLinks: { type: Array, default: () => [] },
     primaryColor: { type: String, default: '' },
@@ -21,8 +22,11 @@ const props = defineProps({
 const emit = defineEmits(['open-content', 'download', 'update:commentContent', 'submit-comment']);
 
 const hasOverview = computed(() => !!(props.overviewHtml && props.overviewHtml.trim()));
-const hasDownloadTab = computed(
-    () => props.allowDownload && Array.isArray(props.downloadableFiles) && props.downloadableFiles.length > 0
+const hasMaterialsTab = computed(
+    () =>
+        props.allowDownload &&
+        ((Array.isArray(props.downloadableFiles) && props.downloadableFiles.length > 0) ||
+            (Array.isArray(props.attachmentFiles) && props.attachmentFiles.length > 0))
 );
 const hasLinksTab = computed(
     () => Array.isArray(props.resourceLinks) && props.resourceLinks.some((l) => l?.url && l?.title)
@@ -31,8 +35,8 @@ const hasCommentsTab = computed(() => props.commentsEnabled);
 
 const tabIds = computed(() => {
     const ids = [];
-    if (hasOverview.value) ids.push('overview');
-    if (hasDownloadTab.value) ids.push('download');
+    ids.push('overview');
+    if (hasMaterialsTab.value) ids.push('materials');
     if (hasLinksTab.value) ids.push('links');
     if (hasCommentsTab.value) ids.push('comments');
     return ids;
@@ -50,10 +54,9 @@ watch(
     { immediate: true }
 );
 
-const activeStyle = computed(() => {
+const accentColor = computed(() => {
     const c = (props.primaryColor || '').trim();
-    if (!c) return {};
-    return { borderBottomColor: c, color: c };
+    return c || '#2563eb';
 });
 
 const showViewerCta = computed(() => props.lessonType === 'pdf_reader' || props.lessonType === 'pdf_presentation');
@@ -66,15 +69,15 @@ const ctaLabel = computed(() => {
 
 const hasAnyTab = computed(() => tabIds.value.length > 0);
 
-function tabButtonClass(id) {
+function tabActiveClass(id) {
     return activeTab.value === id
-        ? 'border-[var(--student-primary,#0047b3)] text-[#001e45]'
+        ? 'border-current text-current'
         : 'border-transparent text-[var(--lesson-text-3)] hover:text-[var(--lesson-text-2)]';
 }
 
-function goToDownloadTab() {
-    if (hasDownloadTab.value) {
-        activeTab.value = 'download';
+function goToMaterialsTab() {
+    if (hasMaterialsTab.value) {
+        activeTab.value = 'materials';
     }
 }
 </script>
@@ -93,44 +96,45 @@ function goToDownloadTab() {
             <button
                 v-if="tabIds.includes('overview')"
                 type="button"
-                class="flex h-11 shrink-0 items-center gap-1.5 border-b-2.5 px-3.5 text-[13px] font-semibold transition"
-                :class="tabButtonClass('overview')"
-                :style="activeTab === 'overview' && primaryColor ? activeStyle : undefined"
+                class="flex h-11 shrink-0 items-center gap-1.5 border-b-2 px-4 text-[13px] font-semibold transition"
+                :class="tabActiveClass('overview')"
+                :style="activeTab === 'overview' ? { color: accentColor, borderColor: accentColor } : undefined"
                 @click="activeTab = 'overview'"
             >
-                Visão geral
+                <AlignLeft class="h-4 w-4" />
+                Descrição
             </button>
             <button
-                v-if="hasDownloadTab"
+                v-if="tabIds.includes('materials')"
                 type="button"
-                class="flex h-11 shrink-0 items-center gap-1.5 border-b-2.5 px-3.5 text-[13px] font-semibold transition"
-                :class="tabButtonClass('download')"
-                :style="activeTab === 'download' && primaryColor ? activeStyle : undefined"
-                @click="activeTab = 'download'"
+                class="flex h-11 shrink-0 items-center gap-1.5 border-b-2 px-4 text-[13px] font-semibold transition"
+                :class="tabActiveClass('materials')"
+                :style="activeTab === 'materials' ? { color: accentColor, borderColor: accentColor } : undefined"
+                @click="activeTab = 'materials'"
             >
-                <Download class="h-3.5 w-3.5" />
-                Baixar PDF
+                <Paperclip class="h-4 w-4" />
+                Materiais
             </button>
             <button
-                v-if="hasLinksTab"
+                v-if="tabIds.includes('links')"
                 type="button"
-                class="flex h-11 shrink-0 items-center gap-1.5 border-b-2.5 px-3.5 text-[13px] font-semibold transition"
-                :class="tabButtonClass('links')"
-                :style="activeTab === 'links' && primaryColor ? activeStyle : undefined"
+                class="flex h-11 shrink-0 items-center gap-1.5 border-b-2 px-4 text-[13px] font-semibold transition"
+                :class="tabActiveClass('links')"
+                :style="activeTab === 'links' ? { color: accentColor, borderColor: accentColor } : undefined"
                 @click="activeTab = 'links'"
             >
-                <Link2 class="h-3.5 w-3.5" />
+                <Link2 class="h-4 w-4" />
                 Links
             </button>
             <button
-                v-if="hasCommentsTab"
+                v-if="tabIds.includes('comments')"
                 type="button"
-                class="flex h-11 shrink-0 items-center gap-1.5 border-b-2.5 px-3.5 text-[13px] font-semibold transition"
-                :class="tabButtonClass('comments')"
-                :style="activeTab === 'comments' && primaryColor ? activeStyle : undefined"
+                class="flex h-11 shrink-0 items-center gap-1.5 border-b-2 px-4 text-[13px] font-semibold transition"
+                :class="tabActiveClass('comments')"
+                :style="activeTab === 'comments' ? { color: accentColor, borderColor: accentColor } : undefined"
                 @click="activeTab = 'comments'"
             >
-                <MessageCircle class="h-3.5 w-3.5" />
+                <MessageCircle class="h-4 w-4" />
                 Comentar
             </button>
         </div>
@@ -141,6 +145,7 @@ function goToDownloadTab() {
                 :active-tab="activeTab"
                 :overview-html="overviewHtml"
                 :downloadable-files="downloadableFiles"
+                :attachment-files="attachmentFiles"
                 :allow-download="allowDownload"
                 :resource-links="resourceLinks"
                 :comments-enabled="commentsEnabled"
@@ -158,8 +163,7 @@ function goToDownloadTab() {
                 <button
                     v-if="showViewerCta"
                     type="button"
-                    class="mt-2 rounded-lg px-6 py-3 text-sm font-bold text-white"
-                    :style="{ backgroundColor: 'var(--student-primary, #0047b3)' }"
+                    class="mt-2 rounded-lg bg-emerald-600 px-6 py-3 text-sm font-bold text-white hover:bg-emerald-700"
                     @click="emit('open-content')"
                 >
                     {{ ctaLabel }}
@@ -168,23 +172,22 @@ function goToDownloadTab() {
         </div>
 
         <footer
-            v-if="showViewerCta || (lessonType === 'pdf' && hasDownloadTab)"
+            v-if="showViewerCta || (lessonType === 'pdf' && hasMaterialsTab)"
             class="shrink-0 border-t border-[var(--lesson-border)] bg-[var(--lesson-surface)] p-4 sm:px-6"
         >
             <button
                 v-if="showViewerCta"
                 type="button"
-                class="w-full rounded-lg px-6 py-3.5 text-sm font-bold text-white shadow-sm"
-                :style="{ backgroundColor: 'var(--student-primary, #0047b3)' }"
+                class="w-full rounded-xl bg-emerald-600 px-6 py-3.5 text-sm font-bold text-white shadow-sm hover:bg-emerald-700"
                 @click="emit('open-content')"
             >
                 {{ ctaLabel }}
             </button>
             <button
-                v-else-if="lessonType === 'pdf' && hasDownloadTab"
+                v-else-if="lessonType === 'pdf' && hasMaterialsTab"
                 type="button"
-                class="w-full rounded-lg border border-[var(--lesson-border)] bg-[var(--lesson-bg)] px-6 py-3.5 text-sm font-bold text-[var(--lesson-text)]"
-                @click="goToDownloadTab"
+                class="w-full rounded-xl border border-[var(--lesson-border)] bg-[var(--lesson-bg)] px-6 py-3.5 text-sm font-bold text-[var(--lesson-text)]"
+                @click="goToMaterialsTab"
             >
                 Ver materiais para download
             </button>

@@ -12,8 +12,10 @@ use App\Models\MemberCommunityPostLike;
 use App\Models\MemberActivityLog;
 use App\Models\MemberInternalProduct;
 use App\Models\MemberLesson;
+use App\Models\MemberLessonBookmark;
 use App\Models\MemberLessonLike;
 use App\Models\MemberLessonPdfAnnotation;
+use App\Models\MemberLessonRating;
 use App\Models\MemberLessonProgress;
 use App\Models\MemberModule;
 use App\Models\MemberSection;
@@ -319,6 +321,7 @@ class MemberAreaAppController extends Controller
                 'type' => $currentLesson->type,
                 'content_url' => $currentLesson->content_url,
                 'content_files' => $currentLesson->content_files,
+                'attachment_files' => $currentLesson->attachment_files,
                 'link_title' => $currentLesson->link_title,
                 'content_text' => \App\Support\HtmlSanitizer::sanitize($currentLesson->content_text),
                 'resource_links' => $this->sanitizeLessonResourceLinksForResponse($currentLesson->resource_links),
@@ -331,8 +334,8 @@ class MemberAreaAppController extends Controller
             if ($currentLessonData['watermark_enabled']) {
                 $currentLessonData['student'] = $this->getStudentWatermarkData($user, $product);
             }
-            if ($currentLesson->type === MemberLesson::TYPE_PDF_READER) {
-                $currentLessonData = array_merge($currentLessonData, $this->pdfReaderLessonExtras($currentLesson, $user));
+            if ($this->isPdfLessonType($currentLesson->type)) {
+                $currentLessonData = array_merge($currentLessonData, $this->lessonEngagementExtras($currentLesson, $user));
             }
         }
 
@@ -484,7 +487,9 @@ class MemberAreaAppController extends Controller
     }
 
     /**
-     * Proxy para PDFs de apresentação (mesma origem): o pdf.js usa fetch; URLs no R2 sem CORS falham no browser.
+     * Proxy same-origin para PDF (leitor/apresentação): pdf.js com credenciais + Range.
+     * Arquivos no R2/S3 são lidos pelo servidor (stream), sem depender de CORS no browser.
+     * ?download=1 força Content-Disposition attachment (botão Baixar material).
      */
     public function presentationPdf(Request $request, string $slug, MemberLesson $lesson, int $fileIndex): SymfonyResponse
     {
@@ -496,28 +501,91 @@ class MemberAreaAppController extends Controller
         if ($fileIndex < 0 || $fileIndex >= count($urls)) {
             abort(404);
         }
-        $url = $urls[$fileIndex];
-        if (! preg_match('#^https?://#i', $url)) {
-            abort(404);
-        }
+        $source = $urls[$fileIndex];
+        $filename = $this->pdfLessonFileName($lesson, $fileIndex);
+        $download = $request->boolean('download');
 
         $this->progressService->ensureLessonStarted($lesson, $request->user());
 
-        $remote = Http::timeout(120)->connectTimeout(30)->get($url);
+        $product = $this->getProduct($request);
+        $tenantId = (int) ($product->tenant_id ?? $request->user()?->tenant_id ?? 0);
+        $storage = new StorageService($tenantId > 0 ? $tenantId : null);
+
+        $path = $storage->pathFromStoredUrl($source);
+        if ($path !== null && $storage->exists($path)) {
+            return $storage->streamPdfResponse($request, $path, $filename, $download);
+        }
+
+        if (! preg_match('#^https?://#i', $source)) {
+            abort(404);
+        }
+
+        $remote = Http::timeout(120)->connectTimeout(30)->get($source);
         if (! $remote->successful()) {
             abort(502, 'Não foi possível obter o arquivo.');
         }
 
-        $path = parse_url($url, PHP_URL_PATH);
-        $filename = $path ? basename($path) : 'apresentacao.pdf';
-        if ($filename === '' || $filename === '/') {
-            $filename = 'apresentacao.pdf';
+        $pathPart = parse_url($source, PHP_URL_PATH);
+        $fallbackName = $pathPart ? basename($pathPart) : 'documento.pdf';
+        if ($fallbackName === '' || $fallbackName === '/') {
+            $fallbackName = 'documento.pdf';
         }
+        $disposition = ($download ? 'attachment' : 'inline').'; filename="'.$fallbackName.'"';
 
         return response($remote->body(), 200, [
             'Content-Type' => 'application/pdf',
-            'Content-Disposition' => 'inline; filename="'.$filename.'"',
-            'Cache-Control' => 'private, max-age=120',
+            'Content-Disposition' => $disposition,
+            'Accept-Ranges' => 'bytes',
+            'Cache-Control' => 'private, max-age=86400',
+            'X-Content-Type-Options' => 'nosniff',
+        ]);
+    }
+
+    /**
+     * Proxy para anexos extras da introdução da aula (?download=1).
+     */
+    public function lessonAttachment(Request $request, string $slug, MemberLesson $lesson, int $fileIndex): SymfonyResponse
+    {
+        $this->assertLessonViewableForPdf($request, $lesson);
+        $files = is_array($lesson->attachment_files) ? $lesson->attachment_files : [];
+        if ($fileIndex < 0 || $fileIndex >= count($files)) {
+            abort(404);
+        }
+        $item = $files[$fileIndex];
+        if (! is_array($item)) {
+            abort(404);
+        }
+        $source = (string) ($item['url'] ?? '');
+        if ($source === '') {
+            abort(404);
+        }
+        $filename = (string) ($item['name'] ?? 'anexo');
+        $download = $request->boolean('download');
+
+        $product = $this->getProduct($request);
+        $tenantId = (int) ($product->tenant_id ?? $request->user()?->tenant_id ?? 0);
+        $storage = new StorageService($tenantId > 0 ? $tenantId : null);
+
+        $path = $storage->pathFromStoredUrl($source);
+        if ($path !== null && $storage->exists($path)) {
+            return $storage->streamFileResponse($request, $path, $filename, $download);
+        }
+
+        if (! preg_match('#^https?://#i', $source)) {
+            abort(404);
+        }
+
+        $remote = Http::timeout(120)->connectTimeout(30)->get($source);
+        if (! $remote->successful()) {
+            abort(502, 'Não foi possível obter o arquivo.');
+        }
+
+        $disposition = ($download ? 'attachment' : 'inline').'; filename="'.$filename.'"';
+
+        return response($remote->body(), 200, [
+            'Content-Type' => $remote->header('Content-Type') ?: 'application/octet-stream',
+            'Content-Disposition' => $disposition,
+            'Cache-Control' => 'private, max-age=86400',
             'X-Content-Type-Options' => 'nosniff',
         ]);
     }
@@ -639,6 +707,98 @@ class MemberAreaAppController extends Controller
     }
 
     /**
+     * PUT — avaliação 1–5 estrelas (aulas PDF).
+     */
+    public function updateLessonRating(Request $request, string $slug, MemberLesson $lesson): JsonResponse
+    {
+        $user = $request->user();
+        if (! $user) {
+            return response()->json(['message' => 'Não autenticado.'], 401);
+        }
+        $this->assertLessonViewableForPdf($request, $lesson);
+        $this->assertPdfLessonEngagementType($lesson);
+
+        $validated = $request->validate([
+            'rating' => ['required', 'integer', 'min:1', 'max:5'],
+        ]);
+
+        $newRating = (int) $validated['rating'];
+        $payload = [];
+
+        DB::transaction(function () use ($lesson, $user, $newRating, &$payload): void {
+            $lessonRow = MemberLesson::query()->whereKey($lesson->id)->lockForUpdate()->first();
+            if (! $lessonRow) {
+                return;
+            }
+
+            $existing = MemberLessonRating::query()
+                ->where('user_id', $user->id)
+                ->where('member_lesson_id', $lesson->id)
+                ->first();
+
+            $oldRating = $existing ? (int) $existing->rating : 0;
+            if ($oldRating === $newRating) {
+                $payload = $this->lessonRatingResponsePayload($lessonRow, $user, $newRating);
+
+                return;
+            }
+
+            if ($existing) {
+                $existing->update(['rating' => $newRating]);
+                $lessonRow->ratings_sum = max(0, (int) $lessonRow->ratings_sum - $oldRating + $newRating);
+            } else {
+                MemberLessonRating::create([
+                    'user_id' => $user->id,
+                    'member_lesson_id' => $lesson->id,
+                    'rating' => $newRating,
+                ]);
+                $lessonRow->ratings_count = (int) $lessonRow->ratings_count + 1;
+                $lessonRow->ratings_sum = (int) $lessonRow->ratings_sum + $newRating;
+            }
+
+            $lessonRow->save();
+            $payload = $this->lessonRatingResponsePayload($lessonRow->fresh(), $user, $newRating);
+        });
+
+        return response()->json($payload);
+    }
+
+    /**
+     * POST — alterna favorito/salvar aula (aulas PDF).
+     */
+    public function toggleLessonBookmark(Request $request, string $slug, MemberLesson $lesson): JsonResponse
+    {
+        $user = $request->user();
+        if (! $user) {
+            return response()->json(['message' => 'Não autenticado.'], 401);
+        }
+        $this->assertLessonViewableForPdf($request, $lesson);
+        $this->assertPdfLessonEngagementType($lesson);
+
+        $bookmarked = false;
+
+        DB::transaction(function () use ($lesson, $user, &$bookmarked): void {
+            $existing = MemberLessonBookmark::query()
+                ->where('user_id', $user->id)
+                ->where('member_lesson_id', $lesson->id)
+                ->first();
+
+            if ($existing) {
+                $existing->delete();
+                $bookmarked = false;
+            } else {
+                MemberLessonBookmark::create([
+                    'user_id' => $user->id,
+                    'member_lesson_id' => $lesson->id,
+                ]);
+                $bookmarked = true;
+            }
+        });
+
+        return response()->json(['user_bookmarked' => $bookmarked]);
+    }
+
+    /**
      * @return array{likes_count: int, user_liked: bool}
      */
     private function pdfReaderLessonExtras(MemberLesson $lesson, User $user): array
@@ -650,6 +810,77 @@ class MemberAreaAppController extends Controller
                 ->where('member_lesson_id', $lesson->id)
                 ->exists(),
         ];
+    }
+
+    /**
+     * @return array{
+     *     user_rating: int|null,
+     *     user_bookmarked: bool,
+     *     ratings_avg: float|null,
+     *     ratings_count: int,
+     *     likes_count?: int,
+     *     user_liked?: bool
+     * }
+     */
+    private function lessonEngagementExtras(MemberLesson $lesson, User $user): array
+    {
+        $count = (int) ($lesson->ratings_count ?? 0);
+        $sum = (int) ($lesson->ratings_sum ?? 0);
+        $userRating = MemberLessonRating::query()
+            ->where('user_id', $user->id)
+            ->where('member_lesson_id', $lesson->id)
+            ->value('rating');
+
+        $extras = [
+            'user_rating' => $userRating !== null ? (int) $userRating : null,
+            'user_bookmarked' => MemberLessonBookmark::query()
+                ->where('user_id', $user->id)
+                ->where('member_lesson_id', $lesson->id)
+                ->exists(),
+            'ratings_avg' => $count > 0 ? round($sum / $count, 1) : null,
+            'ratings_count' => $count,
+        ];
+
+        if ($lesson->type === MemberLesson::TYPE_PDF_READER) {
+            $extras = array_merge($extras, $this->pdfReaderLessonExtras($lesson, $user));
+        }
+
+        return $extras;
+    }
+
+    /**
+     * @return array{user_rating: int, user_bookmarked: bool, ratings_avg: float|null, ratings_count: int}
+     */
+    private function lessonRatingResponsePayload(MemberLesson $lesson, User $user, int $userRating): array
+    {
+        $count = (int) ($lesson->ratings_count ?? 0);
+        $sum = (int) ($lesson->ratings_sum ?? 0);
+
+        return [
+            'user_rating' => $userRating,
+            'user_bookmarked' => MemberLessonBookmark::query()
+                ->where('user_id', $user->id)
+                ->where('member_lesson_id', $lesson->id)
+                ->exists(),
+            'ratings_avg' => $count > 0 ? round($sum / $count, 1) : null,
+            'ratings_count' => $count,
+        ];
+    }
+
+    private function isPdfLessonType(?string $type): bool
+    {
+        return in_array($type, [
+            MemberLesson::TYPE_PDF,
+            MemberLesson::TYPE_PDF_PRESENTATION,
+            MemberLesson::TYPE_PDF_READER,
+        ], true);
+    }
+
+    private function assertPdfLessonEngagementType(MemberLesson $lesson): void
+    {
+        if (! $this->isPdfLessonType($lesson->type)) {
+            abort(404);
+        }
     }
 
     public function completeLesson(Request $request, string $slug, MemberLesson $lesson): JsonResponse|RedirectResponse
@@ -1833,6 +2064,23 @@ class MemberAreaAppController extends Controller
      *
      * @return list<string>
      */
+    private function pdfLessonFileName(MemberLesson $lesson, int $fileIndex): string
+    {
+        $files = $lesson->content_files;
+        if (is_array($files) && isset($files[$fileIndex]) && is_array($files[$fileIndex])) {
+            $name = trim((string) ($files[$fileIndex]['name'] ?? ''));
+            if ($name !== '') {
+                return $name;
+            }
+        }
+
+        $urls = $this->pdfPresentationSourceUrls($lesson);
+        $source = $urls[$fileIndex] ?? '';
+        $path = parse_url($source, PHP_URL_PATH);
+
+        return ($path && basename($path) !== '') ? basename($path) : 'documento.pdf';
+    }
+
     private function pdfPresentationSourceUrls(MemberLesson $lesson): array
     {
         $urls = [];

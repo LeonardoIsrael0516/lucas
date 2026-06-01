@@ -10,6 +10,7 @@ use App\Models\MemberInternalProduct;
 use App\Models\ProductRecommendedProduct;
 use App\Models\MemberLesson;
 use App\Models\MemberLessonProgress;
+use App\Models\MemberLessonRating;
 use App\Models\MemberModule;
 use App\Models\MemberSection;
 use App\Models\MemberTurma;
@@ -21,8 +22,10 @@ use Illuminate\Support\Facades\Hash;
 use App\Services\MemberAreaResolver;
 use App\Services\MemberCommentService;
 use App\Services\ProductAccessService;
+use App\Services\MemberPdfLibraryService;
 use App\Services\StorageService;
 use App\Services\GamificationService;
+use App\Services\LessonTemplateService;
 use App\Services\MemberProgressService;
 use App\Services\TeamAccessService;
 use Illuminate\Http\JsonResponse;
@@ -61,13 +64,57 @@ class MemberBuilderController extends Controller
             if ($url === '' || ! filter_var($url, FILTER_VALIDATE_URL)) {
                 continue;
             }
-            $out[] = [
+            $entry = [
                 'url' => $url,
                 'name' => $name !== '' ? mb_substr($name, 0, 255) : 'Material',
             ];
+            if (isset($item['library_item_id']) && $item['library_item_id'] !== '' && $item['library_item_id'] !== null) {
+                $libraryId = (int) $item['library_item_id'];
+                if ($libraryId > 0) {
+                    $entry['library_item_id'] = $libraryId;
+                }
+            }
+            $out[] = $entry;
         }
 
         return array_slice($out, 0, 30);
+    }
+
+  /**
+     * Anexos extras da introdução (mesmo formato de content_files).
+     *
+     * @return list<array{url: string, name: string}>
+     */
+    private function normalizeLessonAttachmentFiles(mixed $input): array
+    {
+        if (! is_array($input)) {
+            return [];
+        }
+
+        $out = [];
+        foreach ($input as $item) {
+            if (is_string($item)) {
+                $url = trim($item);
+                if ($url !== '' && filter_var($url, FILTER_VALIDATE_URL)) {
+                    $out[] = ['url' => $url, 'name' => 'Anexo'];
+                }
+                continue;
+            }
+            if (! is_array($item)) {
+                continue;
+            }
+            $url = isset($item['url']) ? trim((string) $item['url']) : '';
+            $name = isset($item['name']) ? trim((string) $item['name']) : '';
+            if ($url === '' || ! filter_var($url, FILTER_VALIDATE_URL)) {
+                continue;
+            }
+            $out[] = [
+                'url' => $url,
+                'name' => $name !== '' ? mb_substr($name, 0, 255) : 'Anexo',
+            ];
+        }
+
+        return array_slice($out, 0, 20);
     }
 
     /**
@@ -107,7 +154,10 @@ class MemberBuilderController extends Controller
         $v = trim($value);
         if ($v === '') return null;
 
-        if (str_starts_with($v, 'member-area/') || str_starts_with($v, 'member-area-gamification/') || str_starts_with($v, 'products/')) {
+        if (str_starts_with($v, 'member-area/')
+            || str_starts_with($v, 'member-area-gamification/')
+            || str_starts_with($v, 'member-pdf-library/')
+            || str_starts_with($v, 'products/')) {
             return $v;
         }
 
@@ -282,6 +332,7 @@ class MemberBuilderController extends Controller
             'product_users' => $productUsers,
             'total_lessons' => $totalLessons,
             'student_progress' => $studentProgress,
+            'lesson_ratings' => $this->buildLessonRatingsForProduct($produto),
             '_legacy_community_pages' => $produto->memberCommunityPages->map(fn (MemberCommunityPage $p) => [
                 'id' => $p->id,
                 'title' => $p->title,
@@ -331,6 +382,7 @@ class MemberBuilderController extends Controller
         $imgKb = (int) config('member_builder_uploads.image_max_kb', 10240);
         $badgeKb = (int) config('member_builder_uploads.badge_image_max_kb', 5120);
         $pdfKb = (int) config('member_builder_uploads.pdf_max_kb', 51200);
+        $attachmentKb = (int) config('member_builder_uploads.attachment_max_kb', 51200);
 
         return view('member-builder', [
             'produto' => $produtoPayload,
@@ -342,6 +394,7 @@ class MemberBuilderController extends Controller
                 'image_max_mb' => (int) max(1, floor($imgKb / 1024)),
                 'badge_max_mb' => (int) max(1, floor($badgeKb / 1024)),
                 'pdf_max_mb' => (int) max(1, floor($pdfKb / 1024)),
+                'attachment_max_mb' => (int) max(1, floor($attachmentKb / 1024)),
             ],
         ]);
     }
@@ -485,6 +538,7 @@ class MemberBuilderController extends Controller
     public function uploadPdf(Request $request, Product $produto): JsonResponse
     {
         $this->authorizeProduct($produto);
+        $library = new MemberPdfLibraryService(new StorageService($produto->tenant_id));
         $maxKb = (int) config('member_builder_uploads.pdf_max_kb', 51200);
         $request->validate([
             'file' => ['required', 'file', 'mimetypes:application/pdf', 'max:'.$maxKb],
@@ -493,12 +547,81 @@ class MemberBuilderController extends Controller
             'file.mimetypes' => 'O arquivo deve ser um material em formato PDF.',
             'file.max' => 'O PDF deve ter no máximo '.(int) max(1, floor($maxKb / 1024)).' MB.',
         ]);
-        $file = $request->file('file');
-        $name = $file->getClientOriginalName();
-        $safeName = preg_replace('/[^a-zA-Z0-9._-]/', '_', pathinfo($name, PATHINFO_FILENAME)) . '.pdf';
+        $user = $request->user();
+        $item = $library->store(
+            $request->file('file'),
+            (int) $produto->tenant_id,
+            (string) $produto->id,
+            (int) $user->id
+        );
+        $payload = $library->toPublicPayload($item, 0);
+
+        return response()->json([
+            'url' => $payload['url'],
+            'path' => $item->storage_path,
+            'library_item_id' => $item->id,
+            'item' => $payload,
+        ]);
+    }
+
+    public function uploadAttachment(Request $request, Product $produto): JsonResponse
+    {
+        $this->authorizeProduct($produto);
+        $maxKb = (int) config('member_builder_uploads.attachment_max_kb', 51200);
+        $maxMb = (int) max(1, floor($maxKb / 1024));
+        $request->validate([
+            'file' => [
+                'required',
+                'file',
+                'max:'.$maxKb,
+                'mimetypes:application/pdf,image/jpeg,image/png,image/gif,image/webp,application/zip,application/x-zip-compressed,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.presentationml.presentation,text/plain',
+            ],
+        ], [
+            'file.required' => 'Nenhum arquivo enviado.',
+            'file.max' => 'O anexo deve ter no máximo '.$maxMb.' MB.',
+            'file.mimetypes' => 'Formato não suportado. Use PDF, imagens, ZIP, Office ou TXT.',
+        ]);
+
         $storage = app(StorageService::class);
-        $path = $storage->putFileAs('member-area/' . $produto->id, $file, $safeName);
-        return response()->json(['url' => $storage->url($path), 'path' => $path]);
+        $file = $request->file('file');
+        $original = $file->getClientOriginalName() ?: 'anexo';
+        $path = $storage->putFile('member-area/'.$produto->id.'/attachments', $file);
+
+        return response()->json([
+            'url' => $storage->url($path),
+            'path' => $path,
+            'name' => $original,
+        ]);
+    }
+
+    public function applyLessonTemplate(Request $request, Product $produto, MemberLesson $lesson): JsonResponse
+    {
+        $this->authorizeProduct($produto);
+        if ($lesson->product_id !== $produto->id) {
+            abort(404);
+        }
+
+        $validated = $request->validate([
+            'target_lesson_ids' => ['required', 'array', 'min:1', 'max:100'],
+            'target_lesson_ids.*' => ['integer', 'exists:member_lessons,id'],
+            'keep_target_titles' => ['boolean'],
+            'copy_storage' => ['boolean'],
+        ]);
+
+        $storage = new StorageService($produto->tenant_id);
+        $service = new LessonTemplateService($storage);
+        $updated = $service->applyFromSource(
+            $produto,
+            $lesson,
+            $validated['target_lesson_ids'],
+            $request->boolean('keep_target_titles', true),
+            $request->boolean('copy_storage', true)
+        );
+
+        return response()->json([
+            'message' => count($updated).' aula(s) atualizada(s).',
+            'lessons' => array_map(fn (MemberLesson $l) => $this->lessonJsonPayload($l), $updated),
+        ]);
     }
 
     public function uploadBadge(Request $request, Product $produto): JsonResponse
@@ -872,6 +995,9 @@ class MemberBuilderController extends Controller
             'content_files' => ['nullable', 'array', 'max:30'],
             'content_files.*.url' => ['nullable', 'string', 'url', 'max:2000'],
             'content_files.*.name' => ['nullable', 'string', 'max:255'],
+            'attachment_files' => ['nullable', 'array', 'max:20'],
+            'attachment_files.*.url' => ['nullable', 'string', 'url', 'max:2000'],
+            'attachment_files.*.name' => ['nullable', 'string', 'max:255'],
             'release_after_days' => ['nullable', 'integer', 'min:1', 'max:3650'],
             'release_at_date' => ['nullable', 'date_format:Y-m-d'],
             'content_text' => ['nullable', 'string'],
@@ -891,6 +1017,7 @@ class MemberBuilderController extends Controller
             $validated['release_at_date'] = null;
         }
         $contentFiles = $this->normalizeLessonContentFiles($request->input('content_files'));
+        $attachmentFiles = $this->normalizeLessonAttachmentFiles($request->input('attachment_files'));
         $resourceLinks = $this->normalizeLessonResourceLinks($request->input('resource_links'));
         if (in_array($validated['type'] ?? null, [MemberLesson::TYPE_PDF, MemberLesson::TYPE_PDF_PRESENTATION, MemberLesson::TYPE_PDF_READER], true)
             && empty($validated['content_url']) && count($contentFiles) > 0) {
@@ -908,6 +1035,7 @@ class MemberBuilderController extends Controller
             'content_files' => in_array($validated['type'], [MemberLesson::TYPE_PDF, MemberLesson::TYPE_PDF_PRESENTATION, MemberLesson::TYPE_PDF_READER], true)
                 ? ($contentFiles !== [] ? $contentFiles : null)
                 : null,
+            'attachment_files' => $attachmentFiles !== [] ? $attachmentFiles : null,
             'release_after_days' => $validated['release_after_days'] ?? null,
             'release_at_date' => $validated['release_at_date'] ?? null,
             'content_text' => $validated['content_text'] ?? null,
@@ -940,6 +1068,9 @@ class MemberBuilderController extends Controller
             'content_files' => ['nullable', 'array', 'max:30'],
             'content_files.*.url' => ['nullable', 'string', 'url', 'max:2000'],
             'content_files.*.name' => ['nullable', 'string', 'max:255'],
+            'attachment_files' => ['nullable', 'array', 'max:20'],
+            'attachment_files.*.url' => ['nullable', 'string', 'url', 'max:2000'],
+            'attachment_files.*.name' => ['nullable', 'string', 'max:255'],
             'release_after_days' => ['nullable', 'integer', 'min:1', 'max:3650'],
             'release_at_date' => ['nullable', 'date_format:Y-m-d'],
             'content_text' => ['nullable', 'string'],
@@ -959,6 +1090,10 @@ class MemberBuilderController extends Controller
         if ($request->has('resource_links')) {
             $resourceLinks = $this->normalizeLessonResourceLinks($request->input('resource_links'));
             $validated['resource_links'] = $resourceLinks !== [] ? $resourceLinks : null;
+        }
+        if ($request->has('attachment_files')) {
+            $attachmentFiles = $this->normalizeLessonAttachmentFiles($request->input('attachment_files'));
+            $validated['attachment_files'] = $attachmentFiles !== [] ? $attachmentFiles : null;
         }
         if (array_key_exists('release_at_date', $validated) || array_key_exists('release_after_days', $validated)) {
             $date = $validated['release_at_date'] ?? null;
@@ -1152,6 +1287,7 @@ class MemberBuilderController extends Controller
             'content_url' => $newContentUrl,
             'link_title' => $lesson->link_title,
             'content_files' => $newFiles,
+            'attachment_files' => $this->copyAttachmentFilesForDuplicate($storage, $lesson->attachment_files, $produto->id),
             'release_after_days' => $lesson->release_after_days,
             'release_at_date' => $lesson->release_at_date,
             'content_text' => $lesson->content_text,
@@ -1165,6 +1301,33 @@ class MemberBuilderController extends Controller
             'message' => 'Aula duplicada.',
             'lesson' => $this->lessonJsonPayload($newLesson),
         ]);
+    }
+
+    /**
+     * @param  mixed  $files
+     * @return array<int, array{url: string, name: string}>|null
+     */
+    private function copyAttachmentFilesForDuplicate(StorageService $storage, mixed $files, int|string $productId): ?array
+    {
+        if (! is_array($files) || $files === []) {
+            return null;
+        }
+        $destDir = 'member-area/'.$productId;
+        $out = [];
+        foreach ($files as $it) {
+            if (! is_array($it)) {
+                continue;
+            }
+            $url = isset($it['url']) ? (string) $it['url'] : '';
+            $name = isset($it['name']) ? (string) $it['name'] : 'Anexo';
+            if ($url === '') {
+                continue;
+            }
+            $copiedUrl = $this->copyStorageUrlBestEffort($storage, $url, $destDir);
+            $out[] = ['url' => $copiedUrl ?: $url, 'name' => $name];
+        }
+
+        return $out !== [] ? $out : null;
     }
 
     // Internal products
@@ -1826,6 +1989,7 @@ class MemberBuilderController extends Controller
                 'content_url' => $l->content_url,
                 'link_title' => $l->link_title,
                 'content_files' => $l->content_files,
+                'attachment_files' => $l->attachment_files,
                 'release_after_days' => $l->release_after_days,
                 'release_at_date' => $l->release_at_date?->format('Y-m-d'),
                 'content_text' => \App\Support\HtmlSanitizer::sanitize($l->content_text),
@@ -1862,6 +2026,7 @@ class MemberBuilderController extends Controller
             'content_url' => $lesson->content_url,
             'link_title' => $lesson->link_title,
             'content_files' => $lesson->content_files,
+            'attachment_files' => $lesson->attachment_files,
             'release_after_days' => $lesson->release_after_days,
             'release_at_date' => $lesson->release_at_date?->format('Y-m-d'),
             'content_text' => \App\Support\HtmlSanitizer::sanitize($lesson->content_text),
@@ -1882,5 +2047,65 @@ class MemberBuilderController extends Controller
         }
 
         return 'courses';
+    }
+
+    /**
+     * @return array{lessons: list<array<string, mixed>>}
+     */
+    private function buildLessonRatingsForProduct(Product $product): array
+    {
+        $pdfTypes = [
+            MemberLesson::TYPE_PDF,
+            MemberLesson::TYPE_PDF_PRESENTATION,
+            MemberLesson::TYPE_PDF_READER,
+        ];
+
+        $lessons = MemberLesson::query()
+            ->where('product_id', $product->id)
+            ->whereIn('type', $pdfTypes)
+            ->with('module:id,title')
+            ->orderByDesc('ratings_count')
+            ->orderBy('title')
+            ->get(['id', 'title', 'member_module_id', 'ratings_count', 'ratings_sum']);
+
+        $lessonIds = $lessons->pluck('id')->all();
+        if ($lessonIds === []) {
+            return ['lessons' => []];
+        }
+
+        $recent = MemberLessonRating::query()
+            ->whereIn('member_lesson_id', $lessonIds)
+            ->with('user:id,name,email')
+            ->orderByDesc('updated_at')
+            ->limit(50)
+            ->get();
+
+        $recentByLesson = $recent->groupBy('member_lesson_id');
+
+        return [
+            'lessons' => $lessons->map(function (MemberLesson $lesson) use ($recentByLesson) {
+                $count = (int) ($lesson->ratings_count ?? 0);
+                $sum = (int) ($lesson->ratings_sum ?? 0);
+                $avg = $count > 0 ? round($sum / $count, 1) : null;
+
+                return [
+                    'id' => $lesson->id,
+                    'title' => $lesson->title,
+                    'module_title' => $lesson->module?->title,
+                    'ratings_count' => $count,
+                    'average' => $avg,
+                    'recent' => $recentByLesson->get($lesson->id, collect())
+                        ->take(8)
+                        ->map(fn (MemberLessonRating $r) => [
+                            'user_name' => $r->user?->name ?? 'Aluno',
+                            'user_email' => $r->user?->email,
+                            'rating' => (int) $r->rating,
+                            'updated_at' => $r->updated_at?->format('d/m/Y H:i'),
+                        ])
+                        ->values()
+                        ->all(),
+                ];
+            })->values()->all(),
+        ];
     }
 }

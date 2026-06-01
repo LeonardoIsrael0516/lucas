@@ -26,6 +26,7 @@ class MemberLesson extends Model
         'content_url',
         'link_title',
         'content_files',
+        'attachment_files',
         'release_after_days',
         'release_at_date',
         'content_text',
@@ -33,6 +34,9 @@ class MemberLesson extends Model
         'duration_seconds',
         'is_free',
         'watermark_enabled',
+        'likes_count',
+        'ratings_count',
+        'ratings_sum',
     ];
 
     protected function casts(): array
@@ -43,7 +47,10 @@ class MemberLesson extends Model
             'is_free' => 'boolean',
             'watermark_enabled' => 'boolean',
             'likes_count' => 'integer',
+            'ratings_count' => 'integer',
+            'ratings_sum' => 'integer',
             'content_files' => 'array',
+            'attachment_files' => 'array',
             'resource_links' => 'array',
             'release_after_days' => 'integer',
             'release_at_date' => 'date:Y-m-d',
@@ -73,5 +80,15 @@ class MemberLesson extends Model
     public function pdfAnnotations(): HasMany
     {
         return $this->hasMany(MemberLessonPdfAnnotation::class, 'member_lesson_id');
+    }
+
+    public function ratings(): HasMany
+    {
+        return $this->hasMany(MemberLessonRating::class, 'member_lesson_id');
+    }
+
+    public function bookmarks(): HasMany
+    {
+        return $this->hasMany(MemberLessonBookmark::class, 'member_lesson_id');
     }
 }

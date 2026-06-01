@@ -8,8 +8,10 @@ import MemberPdfPresentationViewer from '@/components/MemberPdfPresentationViewe
 import MemberPdfReader from '@/components/MemberPdfReader.vue';
 import LessonTabs from '@/components/LessonTabs.vue';
 import LessonPdfIntro from '@/components/LessonPdfIntro.vue';
+import LessonPdfActionBar from '@/components/LessonPdfActionBar.vue';
+import axios from 'axios';
 import { formatLessonDescription } from '@/lib/utils';
-import { Link as LinkIcon, Check, ChevronLeft, ChevronRight, List, Menu } from 'lucide-vue-next';
+import { Link as LinkIcon, ChevronLeft, List, Menu, FileText } from 'lucide-vue-next';
 
 defineOptions({ layout: MemberAreaAppLayout });
 
@@ -157,6 +159,16 @@ const downloadableLessonFiles = computed(() => {
     return [];
 });
 
+const introAttachmentDownloadFiles = computed(() => {
+    const cl = props.current_lesson;
+    if (!cl?.id) return [];
+    const base = memberAreaBaseUrl.value;
+    return (Array.isArray(cl.attachment_files) ? cl.attachment_files : []).map((f, i) => ({
+        url: `${base}/aula/${cl.id}/attachment/${i}?download=1`,
+        name: f.name || 'Anexo',
+    }));
+});
+
 const allowLessonDownloads = computed(() => true);
 const isPdfLessonType = (t) => t === 'pdf' || t === 'pdf_presentation' || t === 'pdf_reader';
 
@@ -165,72 +177,163 @@ const lessonResourceLinks = computed(() => {
     return Array.isArray(links) ? links.filter((l) => l?.url && l?.title) : [];
 });
 
-const pdfContentUnlocked = ref(false);
-
-/** Conteúdo configurado na página de introdução (não conta só ter PDF anexado). */
+/** Conteúdo da introdução (visão geral, links, comentários, download). */
 const hasPdfIntroContent = computed(() => {
     const cl = props.current_lesson;
     if (!cl || !isPdfLessonType(cl.type)) return false;
     const hasOverview = !!(formattedOverviewHtml.value && formattedOverviewHtml.value.trim());
     const hasLinks = lessonResourceLinks.value.length > 0;
     const hasComments = props.comments_enabled;
+    const hasDownloads = downloadableLessonFiles.value.length > 0;
+    const hasAttachments = introAttachmentDownloadFiles.value.length > 0;
     if (cl.type === 'pdf') {
-        return hasOverview || hasLinks || hasComments || downloadableLessonFiles.value.length > 0;
+        return hasOverview || hasLinks || hasComments || hasDownloads || hasAttachments;
     }
-    return hasOverview || hasLinks || hasComments;
+    return hasOverview || hasLinks || hasComments || hasDownloads || hasAttachments;
 });
 
+/** Tela cheia de introdução só para material tipo `pdf` (sem leitor embutido). */
 const showPdfIntro = computed(() => {
     const cl = props.current_lesson;
-    if (!cl || !isPdfLessonType(cl.type)) return false;
-    if (!hasPdfIntroContent.value) return false;
-    if (cl.type === 'pdf') return true;
-    return !pdfContentUnlocked.value;
+    return !!cl && cl.type === 'pdf' && hasPdfIntroContent.value;
 });
 
-const showPdfViewer = computed(() => {
-    const cl = props.current_lesson;
-    if (!cl || !isPdfLessonType(cl.type)) return false;
-    if (cl.type === 'pdf') return false;
-    if (!hasPdfIntroContent.value) return true;
-    return pdfContentUnlocked.value;
-});
-
-const hasBottomPanel = computed(
+const showPdfReaderViewer = computed(
     () =>
-        !!props.current_lesson &&
-        !isPdfLessonType(props.current_lesson.type) &&
-        (!!formattedOverviewHtml.value ||
-            downloadableLessonFiles.value.length > 0 ||
-            props.comments_enabled)
+        props.current_lesson?.type === 'pdf_reader' && currentPdfReaderFiles.value.length > 0
 );
 
-function openPdfContent() {
-    pdfContentUnlocked.value = true;
-    const t = props.current_lesson?.type;
-    if (t === 'pdf_presentation' && !completed.value) {
-        markComplete();
+const showPdfPresentationViewer = computed(
+    () =>
+        props.current_lesson?.type === 'pdf_presentation' && currentPresentationFiles.value.length > 0
+);
+
+/** Painel inferior com abas da introdução (embaixo do leitor / conteúdo). */
+const hasBottomPanel = computed(() => {
+    if (!props.current_lesson) return false;
+    const cl = props.current_lesson;
+    if (cl.type === 'pdf_reader' || cl.type === 'pdf_presentation') {
+        return true;
+    }
+    if (isPdfLessonType(cl.type)) return false;
+    return (
+        !!formattedOverviewHtml.value ||
+        downloadableLessonFiles.value.length > 0 ||
+        introAttachmentDownloadFiles.value.length > 0 ||
+        lessonResourceLinks.value.length > 0 ||
+        props.comments_enabled
+    );
+});
+
+const showVisualizingBar = computed(() => {
+    const cl = props.current_lesson;
+    if (!cl || !isPdfLessonType(cl.type)) return false;
+    return (
+        showPdfIntro.value ||
+        showPdfReaderViewer.value ||
+        showPdfPresentationViewer.value ||
+        (cl.type === 'pdf' && currentPdfFiles.value.length > 0)
+    );
+});
+
+/** Abas unificadas fora do leitor (não na tela cheia LessonPdfIntro). */
+const showLessonTabsPanel = computed(() => {
+    if (!props.current_lesson || showPdfIntro.value) return false;
+    const t = props.current_lesson.type;
+    if (t === 'pdf_reader' || t === 'pdf_presentation') return true;
+    if (t === 'pdf') return false;
+    return hasBottomPanel.value;
+});
+
+const showPdfActionBar = computed(
+    () => !!props.current_lesson && isPdfLessonType(props.current_lesson.type)
+);
+
+const showPdfViewerCard = computed(
+    () => showPdfReaderViewer.value || showPdfPresentationViewer.value
+);
+
+const userRating = ref(null);
+const userBookmarked = ref(false);
+const ratingSubmitting = ref(false);
+const bookmarkSubmitting = ref(false);
+
+function syncEngagementFromLesson(lesson) {
+    if (!lesson) {
+        userRating.value = null;
+        userBookmarked.value = false;
+        return;
+    }
+    userRating.value = lesson.user_rating ?? null;
+    userBookmarked.value = !!lesson.user_bookmarked;
+}
+
+async function submitLessonRating(rating) {
+    const cl = props.current_lesson;
+    if (!cl?.id || ratingSubmitting.value) return;
+    ratingSubmitting.value = true;
+    try {
+        const { data } = await axios.put(`${memberAreaBaseUrl.value}/aula/${cl.id}/rating`, { rating });
+        userRating.value = data.user_rating ?? rating;
+        if (typeof data.user_bookmarked === 'boolean') {
+            userBookmarked.value = data.user_bookmarked;
+        }
+    } finally {
+        ratingSubmitting.value = false;
     }
 }
 
-function backToPdfIntro() {
-    pdfContentUnlocked.value = false;
+async function toggleLessonBookmark() {
+    const cl = props.current_lesson;
+    if (!cl?.id || bookmarkSubmitting.value) return;
+    bookmarkSubmitting.value = true;
+    try {
+        const { data } = await axios.post(`${memberAreaBaseUrl.value}/aula/${cl.id}/bookmark`);
+        userBookmarked.value = !!data.user_bookmarked;
+        router.reload({ only: ['has_saved_lessons'] });
+    } finally {
+        bookmarkSubmitting.value = false;
+    }
 }
 
-function handleLessonDownload({ file }) {
+async function handleLessonDownload({ file }) {
     if (!file?.url) return;
-    const a = document.createElement('a');
-    a.href = file.url;
-    a.download = (file.name || 'documento.pdf').replace(/[^\w.\-\u00C0-\u024F]+/g, '_');
-    a.rel = 'noopener';
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
+    const filename = (file.name || 'documento.pdf').replace(/[^\w.\-\u00C0-\u024F]+/g, '_');
+    let downloadUrl;
+    try {
+        downloadUrl = new URL(file.url, window.location.origin);
+        downloadUrl.searchParams.set('download', '1');
+    } catch {
+        return;
+    }
+    try {
+        const res = await fetch(downloadUrl.toString(), { credentials: 'same-origin' });
+        if (!res.ok) {
+            throw new Error('download failed');
+        }
+        const blob = await res.blob();
+        const objectUrl = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = objectUrl;
+        a.download = filename;
+        a.rel = 'noopener';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(objectUrl);
+    } catch {
+        window.location.assign(downloadUrl.toString());
+    }
 }
 
 const completedLessonIds = ref(new Set());
-const completed = ref(props.current_lesson?.is_completed ?? false);
 let autoCompleteTimer = null;
+
+function coerceLessonCompleted(value) {
+    return value === true || value === 1 || value === '1';
+}
+
+const completed = ref(coerceLessonCompleted(props.current_lesson?.is_completed));
 
 function markComplete() {
     if (!props.current_lesson || completed.value) return;
@@ -264,17 +367,18 @@ function shouldAutoCompleteNonVideo() {
 watch(
     () => props.current_lesson?.id,
     () => {
-        pdfContentUnlocked.value = false;
-        completed.value = props.current_lesson?.is_completed ?? false;
+        syncEngagementFromLesson(props.current_lesson);
+        completed.value = coerceLessonCompleted(props.current_lesson?.is_completed);
         if (autoCompleteTimer) clearTimeout(autoCompleteTimer);
-        if (props.current_lesson?.is_completed) return;
+        if (coerceLessonCompleted(props.current_lesson?.is_completed)) return;
         if (props.current_lesson?.type === 'video') scheduleAutoComplete();
         else if (shouldAutoCompleteNonVideo()) setTimeout(() => markComplete(), 500);
     }
 );
 
 onMounted(() => {
-    if (props.current_lesson?.is_completed) completed.value = true;
+    syncEngagementFromLesson(props.current_lesson);
+    if (coerceLessonCompleted(props.current_lesson?.is_completed)) completed.value = true;
     else if (props.current_lesson?.type === 'video') scheduleAutoComplete();
     else if (shouldAutoCompleteNonVideo()) setTimeout(() => markComplete(), 500);
 });
@@ -343,32 +447,6 @@ function onPdfReaderLastPage() {
                 {{ current_lesson.title }}
             </p>
             <div class="ml-auto flex shrink-0 items-center gap-1.5">
-                <Link
-                    v-if="prevLessonHref"
-                    :href="prevLessonHref"
-                    class="hidden items-center gap-1 rounded-lg border border-[var(--lesson-border)] px-2.5 py-1.5 text-xs font-semibold text-[var(--lesson-text-2)] hover:bg-[var(--lesson-bg)] sm:inline-flex"
-                >
-                    Anterior
-                </Link>
-                <span
-                    v-else
-                    class="hidden rounded-lg border border-transparent px-2.5 py-1.5 text-xs text-[var(--lesson-text-3)] opacity-50 sm:inline"
-                >
-                    Anterior
-                </span>
-                <Link
-                    v-if="nextLessonHref"
-                    :href="nextLessonHref"
-                    class="hidden items-center gap-1 rounded-lg border border-[var(--lesson-border)] px-2.5 py-1.5 text-xs font-semibold text-[var(--lesson-text-2)] hover:bg-[var(--lesson-bg)] sm:inline-flex"
-                >
-                    Próxima
-                </Link>
-                <span
-                    v-else
-                    class="hidden rounded-lg border border-transparent px-2.5 py-1.5 text-xs text-[var(--lesson-text-3)] opacity-50 sm:inline"
-                >
-                    Próxima
-                </span>
                 <button
                     type="button"
                     class="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-[var(--lesson-border)] text-[var(--lesson-text-2)] hover:bg-[var(--lesson-bg)] lg:hidden"
@@ -376,22 +454,6 @@ function onPdfReaderLastPage() {
                     @click="courseSidebarOpen = true"
                 >
                     <List class="h-5 w-5" />
-                </button>
-                <button
-                    v-if="current_lesson"
-                    type="button"
-                    class="inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-bold shadow-sm transition sm:text-sm"
-                    :class="
-                        completed
-                            ? 'border-2 border-emerald-600 bg-emerald-50 text-emerald-800 hover:bg-emerald-50'
-                            : 'border border-transparent text-white hover:opacity-95'
-                    "
-                    :style="completed ? undefined : { backgroundColor: 'var(--student-primary, #0047b3)' }"
-                    :disabled="completed"
-                    @click="markComplete"
-                >
-                    <Check v-if="completed" class="h-4 w-4" />
-                    {{ completed ? (isPdfLessonType(current_lesson?.type) ? 'Concluído' : 'Concluído') : 'Marcar como concluído' }}
                 </button>
             </div>
         </div>
@@ -402,13 +464,32 @@ function onPdfReaderLastPage() {
                 <template v-if="current_lesson">
                     <div class="flex min-h-0 flex-1 flex-col overflow-hidden">
                         <!-- Intro PDF / Viewer -->
-                        <div class="min-h-0 flex-1 overflow-hidden">
+                        <div
+                            class="flex min-h-0 flex-1 flex-col overflow-hidden"
+                            :class="
+                                showPdfViewerCard
+                                    ? 'mx-3 mt-3 rounded-xl border border-[var(--lesson-border)] bg-white shadow-sm'
+                                    : ''
+                            "
+                        >
+                            <div
+                                v-if="showVisualizingBar"
+                                class="flex shrink-0 items-center gap-2 border-b border-[var(--lesson-border)] bg-white px-4 py-2.5 text-sm"
+                            >
+                                <FileText class="h-4 w-4 shrink-0 text-emerald-600" />
+                                <span class="shrink-0 text-[var(--lesson-text-3)]">Visualizando:</span>
+                                <span class="min-w-0 truncate font-semibold text-[var(--lesson-text)]">{{
+                                    current_lesson.title
+                                }}</span>
+                            </div>
+                            <div class="min-h-0 flex-1 overflow-hidden">
                             <LessonPdfIntro
                                 v-if="showPdfIntro"
                                 :lesson-type="current_lesson.type"
                                 :lesson-title="current_lesson.title"
                                 :overview-html="formattedOverviewHtml"
                                 :downloadable-files="downloadableLessonFiles"
+                                :attachment-files="introAttachmentDownloadFiles"
                                 :allow-download="allowLessonDownloads"
                                 :resource-links="lessonResourceLinks"
                                 :primary-color="lessonTabsPrimary"
@@ -417,7 +498,6 @@ function onPdfReaderLastPage() {
                                 :lesson-comments="lesson_comments"
                                 :comment-content="commentContent"
                                 :comment-submitting="commentSubmitting"
-                                @open-content="openPdfContent"
                                 @update:comment-content="commentContent = $event"
                                 @submit-comment="submitComment"
                                 @download="handleLessonDownload"
@@ -451,61 +531,24 @@ function onPdfReaderLastPage() {
                                     </a>
                                 </div>
                             </template>
-                            <template
-                                v-else-if="
-                                    showPdfViewer &&
-                                    current_lesson.type === 'pdf_presentation' &&
-                                    currentPresentationFiles.length
-                                "
-                            >
-                                <div class="flex h-full min-h-0 flex-col">
-                                    <div
-                                        v-if="hasPdfIntroContent"
-                                        class="flex shrink-0 items-center border-b border-[var(--lesson-border)] bg-[var(--lesson-surface)] px-3 py-2"
-                                    >
-                                        <button
-                                            type="button"
-                                            class="text-xs font-semibold text-[var(--lesson-text-2)] underline-offset-2 hover:text-[var(--lesson-text)] hover:underline"
-                                            @click="backToPdfIntro"
-                                        >
-                                            Voltar à visão geral
-                                        </button>
-                                    </div>
-                                    <div class="min-h-0 flex-1 overflow-auto bg-[var(--lesson-pdf-bg)] p-4">
-                                        <MemberPdfPresentationViewer :files="currentPresentationFiles" />
-                                    </div>
+                            <template v-else-if="showPdfPresentationViewer">
+                                <div class="h-full min-h-0 overflow-auto bg-[var(--lesson-pdf-bg)] p-4">
+                                    <MemberPdfPresentationViewer :files="currentPresentationFiles" />
                                 </div>
                             </template>
-                            <template
-                                v-else-if="showPdfViewer && current_lesson.type === 'pdf_reader' && currentPdfReaderFiles.length"
-                            >
-                                <div class="flex h-full min-h-0 flex-col">
-                                    <div
-                                        v-if="hasPdfIntroContent"
-                                        class="flex shrink-0 items-center border-b border-[var(--lesson-border)] bg-[var(--lesson-surface)] px-3 py-2"
-                                    >
-                                        <button
-                                            type="button"
-                                            class="text-xs font-semibold text-[var(--lesson-text-2)] underline-offset-2 hover:text-[var(--lesson-text)] hover:underline"
-                                            @click="backToPdfIntro"
-                                        >
-                                            Voltar à visão geral
-                                        </button>
-                                    </div>
-                                    <div class="min-h-0 flex-1 overflow-hidden">
-                                        <MemberPdfReader
-                                            :key="`${current_lesson.id}-open`"
-                                            variant="lesson"
-                                            class="h-full"
-                                            :files="currentPdfReaderFiles"
-                                            :base-url="memberAreaBaseUrl"
-                                            :lesson-id="current_lesson.id"
-                                            :likes-count="current_lesson.likes_count ?? 0"
-                                            :user-liked="!!current_lesson.user_liked"
-                                            @last-page-reached="onPdfReaderLastPage"
-                                        />
-                                    </div>
-                                </div>
+                            <template v-else-if="showPdfReaderViewer">
+                                <MemberPdfReader
+                                    :key="`${current_lesson.id}-open`"
+                                    variant="lesson"
+                                    class="h-full"
+                                    hide-like-button
+                                    :files="currentPdfReaderFiles"
+                                    :base-url="memberAreaBaseUrl"
+                                    :lesson-id="current_lesson.id"
+                                    :likes-count="current_lesson.likes_count ?? 0"
+                                    :user-liked="!!current_lesson.user_liked"
+                                    @last-page-reached="onPdfReaderLastPage"
+                                />
                             </template>
                             <template v-else-if="current_lesson.type === 'text' && current_lesson.content_text">
                                 <div
@@ -536,18 +579,37 @@ function onPdfReaderLastPage() {
                                 </div>
                             </template>
                             <div
-                                v-else-if="!showPdfIntro && !showPdfViewer"
+                                v-else-if="!showPdfIntro && !showPdfReaderViewer && !showPdfPresentationViewer"
                                 class="flex h-full items-center justify-center text-[var(--lesson-text-3)]"
                             >
                                 Conteúdo não disponível.
                             </div>
+                            </div>
                         </div>
 
+                        <LessonPdfActionBar
+                            v-if="showPdfActionBar"
+                            :prev-href="prevLessonHref"
+                            :next-href="nextLessonHref"
+                            :completed="completed"
+                            :user-rating="userRating"
+                            :user-bookmarked="userBookmarked"
+                            :rating-submitting="ratingSubmitting"
+                            :bookmark-submitting="bookmarkSubmitting"
+                            @complete="markComplete"
+                            @rate="submitLessonRating"
+                            @bookmark="toggleLessonBookmark"
+                        />
+
                         <LessonTabs
-                            v-if="hasBottomPanel"
+                            v-if="showLessonTabsPanel"
+                            tall
+                            show-empty-overview
                             :overview-html="formattedOverviewHtml"
                             :downloadable-files="downloadableLessonFiles"
+                            :attachment-files="introAttachmentDownloadFiles"
                             :allow-download="allowLessonDownloads"
+                            :resource-links="lessonResourceLinks"
                             :primary-color="lessonTabsPrimary"
                             :comments-enabled="comments_enabled"
                             :comments-require-approval="comments_require_approval"

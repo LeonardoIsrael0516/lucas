@@ -1455,9 +1455,11 @@ function submit() {
                             </div>
                             <div class="flex flex-col gap-6 sm:flex-row sm:items-start lg:pt-0">
                                 <div v-if="isAreaMembrosProduct" class="flex w-full max-w-md flex-col items-stretch">
-                                    <label class="mb-2 block text-sm font-medium text-zinc-700 dark:text-zinc-300">Capa do curso</label>
+                                    <label class="mb-2 block text-sm font-medium text-zinc-700 dark:text-zinc-300">Imagem do curso (brasão)</label>
                                     <p class="mb-2 text-xs text-zinc-500 dark:text-zinc-400">
-                                        Recomendado {{ COURSE_COVER_WIDTH }}×{{ COURSE_COVER_HEIGHT }} px. Usada no checkout e na área do aluno (hub /area-membros).
+                                        Quadrado, ex.: 400×400 px. Exibida como brasão no hub
+                                        <code class="rounded bg-zinc-100 px-1 font-mono text-[11px] dark:bg-zinc-800">/area-membros</code>
+                                        e no checkout. Se vazio, mostram-se as iniciais do nome do curso.
                                     </p>
                                     <label
                                         class="relative flex aspect-[1060/663] w-full max-w-sm cursor-pointer flex-col items-center justify-center overflow-hidden rounded-xl border-2 border-dashed border-zinc-200 bg-zinc-50/80 transition hover:border-[var(--color-primary)]/50 hover:bg-[var(--color-primary)]/5 dark:border-zinc-600 dark:bg-zinc-800/80 dark:hover:border-[var(--color-primary)]/40 dark:hover:bg-[var(--color-primary)]/10"

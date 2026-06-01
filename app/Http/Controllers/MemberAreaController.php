@@ -21,6 +21,7 @@ use App\Support\StudentAreaSettings;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Str;
 use Inertia\Inertia;
 use Inertia\Response;
 
@@ -91,6 +92,8 @@ class MemberAreaController extends Controller
                 'name' => $product->name,
                 'image_url' => $product->image ? $otherStorage->url($product->image) : null,
                 'cover_url' => $this->productCoverUrl($product, $otherStorage),
+                'crest_url' => $this->productCrestUrl($product, $otherStorage),
+                'subtitle' => $this->productHubSubtitle($product),
                 'price_label' => $this->formatMoney((float) $product->price, $product->currency ?? 'BRL'),
                 'checkout_url' => route('checkout.show', ['slug' => $product->checkout_slug]),
             ];
@@ -131,12 +134,18 @@ class MemberAreaController extends Controller
         $newBadge = $this->hasNewContent($product, $user);
         $lastLessonUrl = $this->lastLessonUrlForProduct($product, $user, $baseUrl);
         $percent = $this->memberProgressService->completionPercent($product, $user);
+        $lessonsTotal = $this->memberProgressService->totalLessonsCount($product);
+        $lessonsCompleted = $this->memberProgressService->completedLessonsCount($product, $user);
 
         return [
             'id' => $product->id,
             'name' => $product->name,
             'image_url' => $product->image ? $storage->url($product->image) : null,
             'cover_url' => $this->productCoverUrl($product, $storage),
+            'crest_url' => $this->productCrestUrl($product, $storage),
+            'subtitle' => $this->productHubSubtitle($product),
+            'lessons_completed' => $lessonsCompleted,
+            'lessons_total' => $lessonsTotal,
             'access_until_label' => $expiry ? 'Acesso até '.$expiry->format('m/Y') : null,
             'apostilas_label' => $pdfStats['total'] > 0
                 ? $pdfStats['total'].' '.($pdfStats['total'] === 1 ? 'apostila' : 'apostilas')
@@ -196,6 +205,7 @@ class MemberAreaController extends Controller
             $items[] = [
                 'product_id' => $product->id,
                 'product_name' => $product->name,
+                'subtitle' => $this->productHubSubtitle($product),
                 'lesson_id' => $lesson->id,
                 'lesson_title' => $lesson->title,
                 'module_title' => $lesson->module?->title,
@@ -206,6 +216,8 @@ class MemberAreaController extends Controller
                 'page_total' => null,
                 'lesson_href' => $lessonHref,
                 'thumbnail_url' => $this->productCoverUrl($product, $storage),
+                'crest_url' => $this->productCrestUrl($product, $storage),
+                'has_new_content' => $this->hasNewContent($product, $user),
             ];
 
             if (count($items) >= 9) {
@@ -464,5 +476,24 @@ class MemberAreaController extends Controller
         }
 
         return null;
+    }
+
+    private function productCrestUrl(Product $product, StorageService $storage): ?string
+    {
+        if ($product->image) {
+            return $storage->url($product->image);
+        }
+
+        return null;
+    }
+
+    private function productHubSubtitle(Product $product): ?string
+    {
+        $text = trim(strip_tags((string) ($product->description ?? '')));
+        if ($text === '') {
+            return null;
+        }
+
+        return Str::limit($text, 80);
     }
 }

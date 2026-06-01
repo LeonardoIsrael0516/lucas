@@ -2,11 +2,13 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue';
 import { router, usePage } from '@inertiajs/vue3';
 import StudentAreaDocumentHead from '@/components/student/StudentAreaDocumentHead.vue';
-import StudentCourseCover from '@/components/student/StudentCourseCover.vue';
 import StudentHubSidebar from '@/components/student/StudentHubSidebar.vue';
+import StudentHubContinueCard from '@/components/student/StudentHubContinueCard.vue';
+import StudentHubOwnedCourseCard from '@/components/student/StudentHubOwnedCourseCard.vue';
+import StudentHubUpsellCourseCard from '@/components/student/StudentHubUpsellCourseCard.vue';
 import StudentAreaBackToPanelLink from '@/components/student/StudentAreaBackToPanelLink.vue';
 import RefundRequestModal from '@/components/member-area/RefundRequestModal.vue';
-import { Bell, BookOpen, ChevronRight, Lock, MoreVertical, RotateCcw, Search } from 'lucide-vue-next';
+import { Bell, Search } from 'lucide-vue-next';
 
 const props = defineProps({
     search_query: { type: String, default: '' },
@@ -108,10 +110,6 @@ function submitSearch(e) {
     router.get('/area-membros', { q: searchLocal.value.trim() || undefined }, { preserveState: true, preserveScroll: true, replace: true });
 }
 
-function lessonProgressBar(item) {
-    if (!item.lesson_total || !item.lesson_index) return 0;
-    return Math.min(100, Math.round((item.lesson_index / item.lesson_total) * 100));
-}
 </script>
 
 <template>
@@ -168,34 +166,12 @@ function lessonProgressBar(item) {
             <main class="min-h-0 flex-1 space-y-10 overflow-y-auto overscroll-y-contain px-4 py-8 pb-24 md:px-8">
                 <section v-if="continue_items.length">
                     <h2 class="mb-4 text-lg font-semibold text-zinc-900">Continue de onde você parou</h2>
-                    <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-                        <a
+                    <div class="flex flex-col gap-4">
+                        <StudentHubContinueCard
                             v-for="item in continue_items"
                             :key="`${item.product_id}-${item.lesson_id}`"
-                            :href="item.lesson_href"
-                            class="group flex flex-col overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-sm transition hover:shadow-md"
-                        >
-                            <StudentCourseCover :src="item.thumbnail_url" :alt="item.product_name" img-class="opacity-80 group-hover:opacity-100">
-                                <div v-if="!item.thumbnail_url" class="absolute inset-0 flex items-center justify-center">
-                                    <BookOpen class="h-12 w-12 text-white/40" />
-                                </div>
-                                <div class="absolute left-2 right-2 top-2 flex justify-between text-xs font-medium text-white drop-shadow">
-                                    <span v-if="item.lesson_index && item.lesson_total">Aula {{ item.lesson_index }} de {{ item.lesson_total }}</span>
-                                    <span v-else class="text-white/80">—</span>
-                                    <span class="text-white/70">pág. —/—</span>
-                                </div>
-                            </StudentCourseCover>
-                            <div class="flex flex-1 flex-col p-4">
-                                <p class="text-xs font-medium text-sky-600">
-                                    <template v-if="item.module_title">{{ item.module_title }}</template>
-                                    <template v-else>{{ item.product_name }}</template>
-                                </p>
-                                <p class="mt-1 line-clamp-2 font-semibold text-zinc-900">{{ item.lesson_title }}</p>
-                                <div class="mt-3 h-1 w-full overflow-hidden rounded-full bg-zinc-200">
-                                    <div class="h-full rounded-full transition-all" :style="{ width: lessonProgressBar(item) + '%', backgroundColor: 'var(--student-primary)' }" />
-                                </div>
-                            </div>
-                        </a>
+                            :item="item"
+                        />
                     </div>
                 </section>
 
@@ -208,160 +184,37 @@ function lessonProgressBar(item) {
 
                 <section id="sec-meus-cursos">
                     <h2 class="mb-4 text-lg font-semibold text-zinc-900">Meus cursos</h2>
-                    <div v-if="my_courses.length" class="grid gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
-                        <div v-for="c in my_courses" :key="c.id" class="flex flex-col overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-sm">
-                            <StudentCourseCover :src="c.cover_url" :alt="c.name">
-                                <span v-if="c.has_new_content" class="absolute left-2 top-2 rounded-full bg-emerald-500 px-2 py-0.5 text-xs font-semibold text-white">Novo conteúdo</span>
-                                <span v-if="c.access_until_label" class="absolute right-2 top-2 rounded bg-black/50 px-2 py-0.5 text-xs text-white">{{ c.access_until_label }}</span>
-                                <div v-if="!c.cover_url" class="absolute inset-0 flex items-center justify-center">
-                                    <span class="text-2xl font-bold tracking-tight text-white/90 drop-shadow">{{ c.name?.slice(0, 8) }}</span>
-                                </div>
-                            </StudentCourseCover>
-                            <div class="flex flex-1 flex-col p-4">
-                                <div class="flex items-start justify-between gap-2">
-                                    <h3 class="min-w-0 flex-1 font-semibold text-zinc-900">{{ c.name }}</h3>
-                                    <div
-                                        v-if="showCourseActionsMenu()"
-                                        class="relative shrink-0"
-                                        :data-course-menu="c.id"
-                                    >
-                                        <button
-                                            type="button"
-                                            class="flex h-8 w-8 items-center justify-center rounded-lg text-zinc-500 transition hover:bg-zinc-100 hover:text-zinc-700"
-                                            aria-label="Ações do curso"
-                                            :aria-expanded="openCourseMenuId === c.id"
-                                            @click.stop="toggleCourseMenu(c.id)"
-                                        >
-                                            <MoreVertical class="h-4 w-4" />
-                                        </button>
-                                        <div
-                                            v-show="openCourseMenuId === c.id"
-                                            class="absolute right-0 top-full z-30 mt-1 w-52 rounded-xl border border-zinc-200 bg-white py-1 shadow-lg"
-                                            role="menu"
-                                        >
-                                            <button
-                                                v-if="c.refund?.can_request"
-                                                type="button"
-                                                role="menuitem"
-                                                class="flex w-full items-center gap-2 px-3 py-2.5 text-left text-sm text-red-700 hover:bg-red-50"
-                                                @click="openRefundFromMenu(c)"
-                                            >
-                                                <RotateCcw class="h-4 w-4 shrink-0" />
-                                                Solicitar reembolso
-                                            </button>
-                                            <p
-                                                v-else-if="c.refund?.pending"
-                                                role="menuitem"
-                                                class="px-3 py-2.5 text-sm text-amber-700"
-                                            >
-                                                Reembolso em análise
-                                            </p>
-                                            <p
-                                                v-else-if="c.refund?.status === 'denied' && !c.refund?.can_request"
-                                                role="menuitem"
-                                                class="px-3 py-2.5 text-sm text-zinc-500"
-                                            >
-                                                Reembolso negado
-                                            </p>
-                                            <p
-                                                v-else
-                                                role="menuitem"
-                                                class="px-3 py-2.5 text-sm text-zinc-500"
-                                            >
-                                                Reembolso indisponível
-                                            </p>
-                                        </div>
-                                    </div>
-                                </div>
-                                <p v-if="c.apostilas_label" class="mt-1 text-sm text-zinc-600">{{ c.apostilas_label }}</p>
-                                <div v-if="c.download_progress" class="mt-2">
-                                    <div class="flex justify-between text-xs text-zinc-500">
-                                        <span>{{ c.download_progress.done }} / {{ c.download_progress.total }} baixados</span>
-                                    </div>
-                                    <div class="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-zinc-200">
-                                        <div
-                                            class="h-full rounded-full bg-sky-500"
-                                            :style="{
-                                                width:
-                                                    c.download_progress.total > 0
-                                                        ? Math.round((c.download_progress.done / c.download_progress.total) * 100) + '%'
-                                                        : '0%',
-                                            }"
-                                        />
-                                    </div>
-                                </div>
-                                <p
-                                    v-if="refund_settings?.enabled && c.refund?.pending"
-                                    class="mt-3 rounded-lg bg-amber-50 px-3 py-2 text-xs font-medium text-amber-800"
-                                >
-                                    Reembolso em análise
-                                </p>
-                                <div class="mt-4 flex flex-wrap gap-2">
-                                    <a
-                                        :href="c.continue_href"
-                                        class="inline-flex flex-1 min-w-[7rem] items-center justify-center rounded-lg px-4 py-2.5 text-sm font-medium text-white transition"
-                                        :style="{ backgroundColor: 'var(--student-primary)' }"
-                                    >
-                                        Continuar
-                                        <ChevronRight class="ml-1 h-4 w-4" />
-                                    </a>
-                                    <a
-                                        :href="c.member_area_href"
-                                        class="inline-flex items-center justify-center rounded-lg border border-zinc-300 px-4 py-2.5 text-sm font-medium text-zinc-700 hover:bg-zinc-50"
-                                    >
-                                        Acessar
-                                    </a>
-                                </div>
-                            </div>
-                        </div>
+                    <div v-if="my_courses.length" class="grid gap-4 lg:grid-cols-2">
+                        <StudentHubOwnedCourseCard
+                            v-for="c in my_courses"
+                            :key="c.id"
+                            :course="c"
+                            :show-actions-menu="showCourseActionsMenu()"
+                            :refund-settings-enabled="!!refund_settings?.enabled"
+                            :menu-open="openCourseMenuId === c.id"
+                            @toggle-menu="toggleCourseMenu(c.id)"
+                            @refund="openRefundFromMenu(c)"
+                        />
                     </div>
                     <p v-else class="text-sm text-zinc-500">Nenhum curso encontrado{{ search_query ? ' para esta busca' : '' }}.</p>
                 </section>
 
                 <section v-if="recommended_courses.length" class="mb-10">
                     <h2 class="mb-4 text-lg font-semibold text-zinc-900">Recomendados para você</h2>
-                    <div class="grid gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
-                        <div v-for="c in recommended_courses" :key="'rec-' + c.id" class="flex flex-col overflow-hidden rounded-xl border border-sky-200 bg-white shadow-sm">
-                            <StudentCourseCover :src="c.cover_url" :alt="c.name" img-class="opacity-70">
-                                <span class="absolute left-2 top-2 rounded-full bg-sky-600 px-2 py-0.5 text-xs font-semibold text-white">Recomendado</span>
-                                <div class="absolute inset-0 flex items-center justify-center">
-                                    <Lock class="h-14 w-14 text-white/50" />
-                                </div>
-                            </StudentCourseCover>
-                            <div class="flex flex-1 flex-col p-4">
-                                <h3 class="font-semibold text-zinc-900">{{ c.name }}</h3>
-                                <p class="mt-2 text-sm font-semibold text-red-600">{{ c.price_label }}</p>
-                                <a
-                                    :href="c.checkout_url"
-                                    class="mt-4 inline-flex items-center justify-center rounded-lg border-2 border-amber-600 px-4 py-2.5 text-sm font-medium text-amber-700 transition hover:bg-amber-50"
-                                >
-                                    Adquirir acesso
-                                </a>
-                            </div>
-                        </div>
+                    <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+                        <StudentHubUpsellCourseCard
+                            v-for="c in recommended_courses"
+                            :key="'rec-' + c.id"
+                            :course="c"
+                            recommended
+                        />
                     </div>
                 </section>
 
                 <section>
                     <h2 v-if="other_courses.length || !recommended_courses.length" class="mb-4 text-lg font-semibold text-zinc-900">Outros cursos disponíveis</h2>
-                    <div v-if="other_courses.length" class="grid gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
-                        <div v-for="c in other_courses" :key="c.id" class="flex flex-col overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-sm">
-                            <StudentCourseCover :src="c.cover_url" :alt="c.name" img-class="opacity-70">
-                                <div class="absolute inset-0 flex items-center justify-center">
-                                    <Lock class="h-14 w-14 text-white/50" />
-                                </div>
-                            </StudentCourseCover>
-                            <div class="flex flex-1 flex-col p-4">
-                                <h3 class="font-semibold text-zinc-900">{{ c.name }}</h3>
-                                <p class="mt-2 text-sm font-semibold text-red-600">{{ c.price_label }}</p>
-                                <a
-                                    :href="c.checkout_url"
-                                    class="mt-4 inline-flex items-center justify-center rounded-lg border-2 border-amber-600 px-4 py-2.5 text-sm font-medium text-amber-700 transition hover:bg-amber-50"
-                                >
-                                    Adquirir acesso
-                                </a>
-                            </div>
-                        </div>
+                    <div v-if="other_courses.length" class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+                        <StudentHubUpsellCourseCard v-for="c in other_courses" :key="c.id" :course="c" />
                     </div>
                     <p v-else-if="!recommended_courses.length" class="text-sm text-zinc-500">Não há outros cursos disponíveis no momento.</p>
                 </section>

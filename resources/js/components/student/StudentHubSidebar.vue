@@ -1,10 +1,11 @@
 <script setup>
-import { ref, toRef } from 'vue';
-import { Link } from '@inertiajs/vue3';
+import { computed, ref, toRef } from 'vue';
+import { Link, usePage } from '@inertiajs/vue3';
 import StudentAreaBackToPanelLink from '@/components/student/StudentAreaBackToPanelLink.vue';
 import { useStudentAreaSidebarLogo } from '@/composables/useStudentAreaLogo';
 import {
     Award,
+    Bookmark,
     ChevronRight,
     LayoutGrid,
     LifeBuoy,
@@ -25,7 +26,7 @@ const props = defineProps({
     },
     profile_href: { type: String, default: '/meu-perfil' },
     suporte_href: { type: String, default: null },
-    /** courses | community | certificate | gamification | support | profile */
+    /** courses | saved | community | certificate | gamification | support | profile */
     active: { type: String, default: 'courses' },
     /** When true, "Meus cursos" links to /area-membros instead of anchor */
     courses_href: { type: String, default: '/area-membros' },
@@ -37,7 +38,26 @@ const props = defineProps({
     showSidebarLogout: { type: Boolean, default: true },
 });
 
-const emit = defineEmits(['update:collapsed']);
+const emit = defineEmits(['update:collapsed', 'navigate']);
+
+const page = usePage();
+const hasSavedLessons = computed(() => !!page.props.has_saved_lessons);
+const savedLessonsHref = computed(() => page.props.saved_lessons_href || '/area-membros/salvos');
+const savedLinkIsExternal = computed(() => {
+    if (typeof window === 'undefined') {
+        return false;
+    }
+    try {
+        const target = new URL(savedLessonsHref.value, window.location.origin);
+        return target.origin !== window.location.origin;
+    } catch {
+        return false;
+    }
+});
+
+function onNavClick() {
+    emit('navigate');
+}
 
 const collapsedLocal = ref(props.collapsed);
 const { sidebarLogoUrl } = useStudentAreaSidebarLogo(toRef(props, 'student_branding'), collapsedLocal);
@@ -134,10 +154,11 @@ function coursesActiveStyle() {
             </p>
 
             <Link
-                v-if="courses_href.startsWith('/')"
+                v-if="courses_href.startsWith('/') && !courses_href.startsWith('//')"
                 :href="courses_href"
                 :class="navClass('courses')"
                 :style="coursesActiveStyle()"
+                @click="onNavClick"
             >
                 <LayoutGrid class="h-5 w-5 shrink-0" />
                 <span v-if="!collapsedLocal">Meus cursos</span>
@@ -147,10 +168,30 @@ function coursesActiveStyle() {
                 :href="courses_href"
                 :class="navClass('courses')"
                 :style="coursesActiveStyle()"
+                @click="onNavClick"
             >
                 <LayoutGrid class="h-5 w-5 shrink-0" />
                 <span v-if="!collapsedLocal">Meus cursos</span>
             </a>
+
+            <a
+                v-if="hasSavedLessons && savedLinkIsExternal"
+                :href="savedLessonsHref"
+                :class="navClass('saved')"
+                @click="onNavClick"
+            >
+                <Bookmark class="h-5 w-5 shrink-0" />
+                <span v-if="!collapsedLocal">Aulas salvas</span>
+            </a>
+            <Link
+                v-else-if="hasSavedLessons"
+                :href="savedLessonsHref"
+                :class="navClass('saved')"
+                @click="onNavClick"
+            >
+                <Bookmark class="h-5 w-5 shrink-0" />
+                <span v-if="!collapsedLocal">Aulas salvas</span>
+            </Link>
 
             <StudentAreaBackToPanelLink :collapsed="collapsedLocal" :dark-sidebar="variant === 'navy'" />
 

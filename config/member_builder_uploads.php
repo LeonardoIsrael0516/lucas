@@ -18,4 +18,7 @@ return [
 
     /** PDFs de material e apresentação — rota upload-pdf */
     'pdf_max_kb' => (int) env('MEMBER_BUILDER_UPLOAD_PDF_MAX_KB', 51200),
+
+    /** Anexos extras da introdução da aula (DOC, ZIP, imagens, etc.) — rota upload-attachment */
+    'attachment_max_kb' => (int) env('MEMBER_BUILDER_UPLOAD_ATTACHMENT_MAX_KB', 51200),
 ];

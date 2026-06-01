@@ -3,6 +3,7 @@ import { ref, shallowRef, watch, onMounted, onUnmounted, computed, nextTick, def
 import * as pdfjsLib from 'pdfjs-dist';
 import PdfJsWorker from 'pdfjs-dist/build/pdf.worker.min.mjs?worker';
 import PdfJsWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
+import { loadPdfDocument } from '@/lib/pdfjsLoad';
 import axios from 'axios';
 import { Heart, ZoomIn, ZoomOut, Highlighter, Maximize2, Minimize2 } from 'lucide-vue-next';
 let pdfWorkerAvailable = !import.meta.env.DEV;
@@ -27,12 +28,9 @@ function isWorkerBootstrapError(error) {
 }
 
 async function loadPdfDoc(url, forceMainThread = false) {
-    const task = pdfjsLib.getDocument({
-        url,
-        withCredentials: false,
+    return loadPdfDocument(url, {
         disableWorker: forceMainThread || !pdfWorkerAvailable,
     });
-    return task.promise;
 }
 
 const props = defineProps({
@@ -42,6 +40,7 @@ const props = defineProps({
     likesCount: { type: Number, default: 0 },
     userLiked: { type: Boolean, default: false },
     variant: { type: String, default: '' },
+    hideLikeButton: { type: Boolean, default: false },
 });
 
 const isLessonVariant = computed(() => props.variant === 'lesson');
@@ -308,20 +307,22 @@ async function loadDocuments() {
     }
 
     try {
-        const docs = [];
-        let pages = 0;
-        for (const { url } of list) {
-            let pdf;
+        const loadOne = async (url) => {
             try {
-                pdf = await loadPdfDoc(url);
+                return await loadPdfDoc(url);
             } catch (firstError) {
-                if (!isWorkerBootstrapError(firstError)) throw firstError;
-                // Dev fallback: force load without worker when browser blocks cross-origin worker bootstrap.
+                if (!isWorkerBootstrapError(firstError)) {
+                    throw firstError;
+                }
                 pdfWorkerAvailable = false;
                 pdfjsLib.GlobalWorkerOptions.workerPort = null;
-                pdf = await loadPdfDoc(url, true);
+                return loadPdfDoc(url, true);
             }
-            docs.push(pdf);
+        };
+
+        const docs = await Promise.all(list.map(({ url }) => loadOne(url)));
+        let pages = 0;
+        for (const pdf of docs) {
             pages += pdf.numPages;
         }
         pdfDocs.value = docs;
@@ -831,19 +832,37 @@ async function toggleLike() {
     }
 }
 
-function downloadPdf() {
+async function downloadPdf() {
     const files = props.files || [];
     const idx = currentLocal.value.fileIndex;
     const item = files[idx];
     if (!item?.url) return;
-    const a = document.createElement('a');
-    a.href = item.url;
-    a.download = (item.name || 'documento.pdf').replace(/[^\w.\-\u00C0-\u024F]+/g, '_');
-    a.rel = 'noopener';
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    showToast('Download iniciado. Verifique sua pasta de downloads.');
+    const filename = (item.name || 'documento.pdf').replace(/[^\w.\-\u00C0-\u024F]+/g, '_');
+    let downloadUrl;
+    try {
+        downloadUrl = new URL(item.url, window.location.origin);
+        downloadUrl.searchParams.set('download', '1');
+    } catch {
+        showToast('Não foi possível iniciar o download.');
+        return;
+    }
+    try {
+        const res = await fetch(downloadUrl.toString(), { credentials: 'same-origin' });
+        if (!res.ok) throw new Error('download failed');
+        const blob = await res.blob();
+        const objectUrl = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = objectUrl;
+        a.download = filename;
+        a.rel = 'noopener';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(objectUrl);
+        showToast('Download iniciado. Verifique sua pasta de downloads.');
+    } catch {
+        window.location.assign(downloadUrl.toString());
+    }
 }
 
 const hasPdf = computed(() => pdfDocs.value.length > 0 && totalPages.value > 0 && !error.value);
@@ -1113,6 +1132,7 @@ watch([isLessonVariant, loading, error], () => {
                 </div>
                 <div class="flex-1" />
                 <button
+                    v-if="!hideLikeButton"
                     type="button"
                     class="inline-flex items-center gap-1 rounded-md border px-2.5 py-1 text-xs font-semibold transition"
                     :class="
@@ -1372,6 +1392,7 @@ watch([isLessonVariant, loading, error], () => {
                     </div>
                 </aside>
             </div>
+
         </div>
     </div>
 </template>

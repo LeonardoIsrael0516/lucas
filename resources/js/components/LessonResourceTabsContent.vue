@@ -1,11 +1,13 @@
 <script setup>
 import { computed } from 'vue';
 import { ExternalLink } from 'lucide-vue-next';
+import LessonDescriptionExpandable from '@/components/LessonDescriptionExpandable.vue';
 
 const props = defineProps({
     activeTab: { type: String, required: true },
     overviewHtml: { type: String, default: '' },
     downloadableFiles: { type: Array, default: () => [] },
+    attachmentFiles: { type: Array, default: () => [] },
     allowDownload: { type: Boolean, default: true },
     resourceLinks: { type: Array, default: () => [] },
     commentsEnabled: { type: Boolean, default: false },
@@ -18,9 +20,17 @@ const props = defineProps({
 
 const emit = defineEmits(['download', 'update:commentContent', 'submit-comment']);
 
-const hasOverview = computed(() => !!(props.overviewHtml && props.overviewHtml.trim()));
-const hasDownloadTab = computed(
+const hasMaterialsTab = computed(
+    () =>
+        props.allowDownload &&
+        ((Array.isArray(props.downloadableFiles) && props.downloadableFiles.length > 0) ||
+            (Array.isArray(props.attachmentFiles) && props.attachmentFiles.length > 0))
+);
+const hasDownloadables = computed(
     () => props.allowDownload && Array.isArray(props.downloadableFiles) && props.downloadableFiles.length > 0
+);
+const hasAttachments = computed(
+    () => props.allowDownload && Array.isArray(props.attachmentFiles) && props.attachmentFiles.length > 0
 );
 const hasLinksTab = computed(
     () => Array.isArray(props.resourceLinks) && props.resourceLinks.some((l) => l?.url && l?.title)
@@ -50,33 +60,51 @@ function formatCommentDate(iso) {
 <template>
     <div :class="contentClass">
         <div v-show="activeTab === 'overview'">
-            <p class="mb-2 text-xs font-bold uppercase tracking-wide text-[var(--lesson-text-3)]">Visão geral da aula</p>
-            <div v-if="hasOverview" class="prose prose-sm max-w-none text-[var(--lesson-text)]" v-html="overviewHtml" />
-            <p v-else class="text-sm italic text-[var(--lesson-text-3)]">Nenhuma descrição foi adicionada para esta aula.</p>
+            <LessonDescriptionExpandable :html="overviewHtml" />
         </div>
 
-        <div v-show="activeTab === 'download' && hasDownloadTab" class="space-y-2">
-            <p class="mb-2 text-xs font-bold uppercase tracking-wide text-[var(--lesson-text-3)]">Materiais para download</p>
-            <div class="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
-                <div
-                    v-for="(file, index) in downloadableFiles"
-                    :key="`${file.url}-${index}`"
-                    class="flex items-center justify-between gap-2 rounded-lg border border-[var(--lesson-border)] bg-[var(--lesson-bg)] px-3 py-2"
-                >
-                    <p class="min-w-0 text-sm font-bold text-[var(--lesson-text)]">{{ file.name || 'PDF' }}</p>
-                    <button
-                        type="button"
-                        class="shrink-0 rounded-md bg-emerald-700 px-3 py-1.5 text-xs font-bold text-white hover:bg-emerald-600"
-                        @click="onDownloadClick(file, index)"
+        <div v-show="activeTab === 'materials' && hasMaterialsTab" class="space-y-4">
+            <div v-if="hasDownloadables" class="space-y-2">
+                <p class="text-xs font-semibold text-[var(--lesson-text-3)]">PDF da aula</p>
+                <div class="flex flex-col gap-2">
+                    <div
+                        v-for="(file, index) in downloadableFiles"
+                        :key="`${file.url}-${index}`"
+                        class="flex items-center justify-between gap-2 rounded-lg border border-[var(--lesson-border)] bg-[var(--lesson-bg)] px-3 py-2"
                     >
-                        Baixar
-                    </button>
+                        <p class="min-w-0 text-sm font-bold text-[var(--lesson-text)]">{{ file.name || 'PDF' }}</p>
+                        <button
+                            type="button"
+                            class="shrink-0 rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-emerald-700"
+                            @click="onDownloadClick(file, index)"
+                        >
+                            Baixar
+                        </button>
+                    </div>
+                </div>
+            </div>
+            <div v-if="hasAttachments" class="space-y-2">
+                <p class="text-xs font-semibold text-[var(--lesson-text-3)]">Outros arquivos</p>
+                <div class="flex flex-col gap-2">
+                    <div
+                        v-for="(file, index) in attachmentFiles"
+                        :key="`att-${file.url}-${index}`"
+                        class="flex items-center justify-between gap-2 rounded-lg border border-[var(--lesson-border)] bg-[var(--lesson-bg)] px-3 py-2"
+                    >
+                        <p class="min-w-0 text-sm font-bold text-[var(--lesson-text)]">{{ file.name || 'Anexo' }}</p>
+                        <button
+                            type="button"
+                            class="shrink-0 rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-emerald-700"
+                            @click="onDownloadClick(file, index)"
+                        >
+                            Baixar
+                        </button>
+                    </div>
                 </div>
             </div>
         </div>
 
         <div v-show="activeTab === 'links' && hasLinksTab" class="space-y-2">
-            <p class="mb-2 text-xs font-bold uppercase tracking-wide text-[var(--lesson-text-3)]">Links úteis</p>
             <ul class="space-y-2">
                 <li v-for="(link, index) in resourceLinks" :key="`${link.url}-${index}`">
                     <a
@@ -94,7 +122,6 @@ function formatCommentDate(iso) {
         </div>
 
         <div v-show="activeTab === 'comments' && commentsEnabled" class="space-y-3">
-            <p class="mb-2 text-xs font-bold uppercase tracking-wide text-[var(--lesson-text-3)]">Comentários da aula</p>
             <ul v-if="lessonComments?.length" class="max-h-48 space-y-2 overflow-y-auto sm:max-h-64">
                 <li
                     v-for="c in lessonComments"
@@ -129,8 +156,7 @@ function formatCommentDate(iso) {
                 </p>
                 <button
                     type="button"
-                    class="ml-auto rounded-lg px-4 py-2 text-sm font-bold text-white disabled:opacity-50"
-                    :style="{ backgroundColor: 'var(--student-primary, #001e45)' }"
+                    class="ml-auto rounded-lg bg-emerald-600 px-4 py-2 text-sm font-bold text-white hover:bg-emerald-700 disabled:opacity-50"
                     :disabled="commentSubmitting || !commentContent?.trim()"
                     @click="emit('submit-comment')"
                 >
