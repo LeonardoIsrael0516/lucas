@@ -91,6 +91,23 @@ const selectCurrent = ref(null);
 let renderTask = null;
 let resizeObserver = null;
 let resizeObservedEl = null;
+let resizeDebounceTimer = null;
+
+const HOST_MIN_LAYOUT_PX = 80;
+const THUMB_CHUNK_SIZE = 4;
+const RESIZE_DEBOUNCE_MS = 50;
+const HOST_LAYOUT_WAIT_MS = 4000;
+const RENDER_RETRY_MAX = 12;
+const RENDER_RETRY_DELAY_MS = 120;
+
+let renderRetryTimer = null;
+const mainCanvasReady = ref(false);
+
+/** Invalida carregamentos / miniaturas ao trocar de aula */
+let loadGeneration = 0;
+let thumbRenderToken = 0;
+let thumbIdleId = null;
+const thumbsRenderedPages = new Set();
 
 const WHEEL_LISTENER_OPTS = { passive: false };
 let wheelHostEl = null;
@@ -221,14 +238,110 @@ async function saveFileIndexAnnotations(fi) {
     }
 }
 
-function hostContentBox(host) {
+function hostHasValidLayout(host) {
+    if (!host) return false;
     const s = getComputedStyle(host);
     const padX = parseFloat(s.paddingLeft) + parseFloat(s.paddingRight);
     const padY = parseFloat(s.paddingTop) + parseFloat(s.paddingBottom);
+    return (
+        host.clientWidth - padX >= HOST_MIN_LAYOUT_PX && host.clientHeight - padY >= HOST_MIN_LAYOUT_PX
+    );
+}
+
+function waitForHostLayout(host, timeoutMs = HOST_LAYOUT_WAIT_MS) {
+    return new Promise((resolve) => {
+        if (!host) {
+            resolve(false);
+            return;
+        }
+        if (hostHasValidLayout(host)) {
+            resolve(true);
+            return;
+        }
+        let settled = false;
+        const finish = (ok) => {
+            if (settled) return;
+            settled = true;
+            try {
+                ro.disconnect();
+            } catch (_) {}
+            clearTimeout(timer);
+            resolve(ok);
+        };
+        const ro = new ResizeObserver(() => {
+            if (hostHasValidLayout(host)) finish(true);
+        });
+        ro.observe(host);
+        const timer = setTimeout(() => finish(hostHasValidLayout(host)), timeoutMs);
+        requestAnimationFrame(() => {
+            if (hostHasValidLayout(host)) finish(true);
+        });
+    });
+}
+
+/** Dimensões úteis para fit; fallback se o flex ainda não deu altura ao host */
+function hostContentBox(host) {
+    if (!host) {
+        return { w: 640, h: 480 };
+    }
+    const s = getComputedStyle(host);
+    const padX = parseFloat(s.paddingLeft) + parseFloat(s.paddingRight);
+    const padY = parseFloat(s.paddingTop) + parseFloat(s.paddingBottom);
+    let w = host.clientWidth - padX;
+    let h = host.clientHeight - padY;
+
+    if (w < HOST_MIN_LAYOUT_PX || h < HOST_MIN_LAYOUT_PX) {
+        let el = host.parentElement;
+        for (let i = 0; i < 4 && el; i++) {
+            w = Math.max(w, el.clientWidth - padX);
+            h = Math.max(h, el.clientHeight - padY);
+            if (w >= HOST_MIN_LAYOUT_PX && h >= HOST_MIN_LAYOUT_PX) break;
+            el = el.parentElement;
+        }
+    }
+    if (w < HOST_MIN_LAYOUT_PX || h < HOST_MIN_LAYOUT_PX) {
+        w = Math.max(w, Math.min(900, Math.floor(window.innerWidth * 0.55)));
+        h = Math.max(h, Math.min(700, Math.floor(window.innerHeight * 0.45)));
+    }
+
     return {
-        w: Math.max(80, host.clientWidth - padX),
-        h: Math.max(80, host.clientHeight - padY),
+        w: Math.max(80, w),
+        h: Math.max(80, h),
     };
+}
+
+function clearRenderRetry() {
+    if (renderRetryTimer) {
+        clearTimeout(renderRetryTimer);
+        renderRetryTimer = null;
+    }
+}
+
+function isMainCanvasPainted() {
+    const canvas = canvasRef.value;
+    return !!canvas && canvas.width > 16 && canvas.height > 16;
+}
+
+function scheduleRenderRetry(gen = loadGeneration) {
+    clearRenderRetry();
+    const attempt = async (left) => {
+        if (gen !== loadGeneration || !pdfDocs.value.length) return;
+        if (isMainCanvasPainted()) {
+            mainCanvasReady.value = true;
+            return;
+        }
+        await nextTick();
+        await renderCurrentPage();
+        if (gen !== loadGeneration) return;
+        if (isMainCanvasPainted()) {
+            mainCanvasReady.value = true;
+            return;
+        }
+        if (left > 0) {
+            renderRetryTimer = setTimeout(() => void attempt(left - 1), RENDER_RETRY_DELAY_MS);
+        }
+    };
+    void attempt(RENDER_RETRY_MAX);
 }
 
 async function renderCurrentPage() {
@@ -275,6 +388,7 @@ async function renderCurrentPage() {
         if (e?.name !== 'RenderingCancelledException') console.warn(e);
     }
     renderTask = null;
+    mainCanvasReady.value = canvas.width > 16 && canvas.height > 16;
     void renderNextPeek();
     await nextTick();
     if (isLessonDesktopViewer.value) {
@@ -301,6 +415,7 @@ async function renderNextPeek() {
 }
 
 async function destroyDocs() {
+    thumbsRenderedPages.clear();
     for (const d of pdfDocs.value) {
         try {
             await d.destroy();
@@ -309,7 +424,52 @@ async function destroyDocs() {
     pdfDocs.value = [];
 }
 
+async function loadOnePdfDocument(url) {
+    try {
+        return await loadPdfDoc(url);
+    } catch (firstError) {
+        if (!isWorkerBootstrapError(firstError)) {
+            throw firstError;
+        }
+        pdfWorkerAvailable = false;
+        pdfjsLib.GlobalWorkerOptions.workerPort = null;
+        return loadPdfDoc(url, true);
+    }
+}
+
+function countTotalPages(docs) {
+    let pages = 0;
+    for (const pdf of docs) {
+        pages += pdf.numPages;
+    }
+    return pages;
+}
+
+async function loadRemainingPdfFiles(rest, gen) {
+    try {
+        const docs = await Promise.all(rest.map(({ url }) => loadOnePdfDocument(url)));
+        if (gen !== loadGeneration) {
+            for (const d of docs) {
+                try {
+                    await d.destroy();
+                } catch (_) {}
+            }
+            return;
+        }
+        pdfDocs.value = [...pdfDocs.value, ...docs];
+        totalPages.value = countTotalPages(pdfDocs.value);
+        scheduleThumbRender();
+    } catch (e) {
+        console.warn('[pdf] Falha ao carregar PDFs adicionais', e);
+    }
+}
+
 async function loadDocuments() {
+    const gen = ++loadGeneration;
+    cancelThumbRender();
+    clearRenderRetry();
+    thumbsRenderedPages.clear();
+    mainCanvasReady.value = false;
     loading.value = true;
     error.value = '';
     await destroyDocs();
@@ -325,38 +485,127 @@ async function loadDocuments() {
     }
 
     try {
-        const loadOne = async (url) => {
+        const firstDoc = await loadOnePdfDocument(list[0].url);
+        if (gen !== loadGeneration) {
             try {
-                return await loadPdfDoc(url);
-            } catch (firstError) {
-                if (!isWorkerBootstrapError(firstError)) {
-                    throw firstError;
-                }
-                pdfWorkerAvailable = false;
-                pdfjsLib.GlobalWorkerOptions.workerPort = null;
-                return loadPdfDoc(url, true);
-            }
-        };
-
-        const docs = await Promise.all(list.map(({ url }) => loadOne(url)));
-        let pages = 0;
-        for (const pdf of docs) {
-            pages += pdf.numPages;
+                await firstDoc.destroy();
+            } catch (_) {}
+            return;
         }
-        pdfDocs.value = docs;
-        totalPages.value = pages;
-        await loadAnnotations();
+
+        pdfDocs.value = [firstDoc];
+        totalPages.value = firstDoc.numPages;
         await nextTick();
+        await waitForHostLayout(canvasHostRef.value);
+        if (gen !== loadGeneration) return;
         await renderCurrentPage();
-        await nextTick();
-        void renderVisibleThumbs();
+        if (gen !== loadGeneration) return;
+
+        void loadAnnotations();
+        scheduleThumbRender();
+
+        if (list.length > 1) {
+            void loadRemainingPdfFiles(list.slice(1), gen);
+        }
     } catch (e) {
         console.error(e);
-        error.value =
-            'Não foi possível carregar o PDF. Tente atualizar a página ou contacte o suporte se o problema continuar.';
-        await destroyDocs();
+        if (gen === loadGeneration) {
+            error.value =
+                'Não foi possível carregar o PDF. Tente atualizar a página ou contacte o suporte se o problema continuar.';
+            await destroyDocs();
+        }
     } finally {
-        loading.value = false;
+        if (gen === loadGeneration) {
+            loading.value = false;
+            await nextTick();
+            scheduleRenderRetry(gen);
+        }
+    }
+}
+
+function cancelThumbRender() {
+    thumbRenderToken += 1;
+    if (thumbIdleId !== null) {
+        if (typeof cancelIdleCallback !== 'undefined') {
+            cancelIdleCallback(thumbIdleId);
+        } else {
+            clearTimeout(thumbIdleId);
+        }
+        thumbIdleId = null;
+    }
+}
+
+function scheduleThumbRender() {
+    cancelThumbRender();
+    const token = thumbRenderToken;
+    const run = () => {
+        thumbIdleId = null;
+        if (token !== thumbRenderToken) return;
+        void renderThumbsStaged(token);
+    };
+    if (typeof requestIdleCallback !== 'undefined') {
+        thumbIdleId = requestIdleCallback(run, { timeout: 800 });
+    } else {
+        thumbIdleId = setTimeout(run, 50);
+    }
+}
+
+async function yieldToMain() {
+    await new Promise((resolve) => {
+        if (typeof requestIdleCallback !== 'undefined') {
+            requestIdleCallback(() => resolve(), { timeout: 120 });
+        } else {
+            setTimeout(resolve, 16);
+        }
+    });
+}
+
+async function renderThumbPage(pg) {
+    const { doc, pageNum } = globalToLocal(pg);
+    if (!doc) return;
+    const canvases = [thumbCanvases.value[pg], fsThumbCanvases.value[pg]].filter(Boolean);
+    if (!canvases.length) return;
+    const page = await doc.getPage(pageNum);
+    const vp = page.getViewport({ scale: 0.18 });
+    for (const canvas of canvases) {
+        const ctx = canvas.getContext('2d');
+        canvas.width = vp.width;
+        canvas.height = vp.height;
+        await page.render({ canvasContext: ctx, viewport: vp }).promise;
+    }
+    thumbsRenderedPages.add(pg);
+}
+
+async function renderThumbPages(pages, token) {
+    for (const pg of pages) {
+        if (token !== thumbRenderToken) return;
+        if (thumbsRenderedPages.has(pg)) continue;
+        await renderThumbPage(pg);
+    }
+}
+
+async function renderThumbsStaged(token) {
+    await nextTick();
+    if (token !== thumbRenderToken || totalPages.value <= 0) return;
+
+    const center = globalPage.value;
+    const priority = [];
+    for (let pg = Math.max(1, center - 2); pg <= Math.min(totalPages.value, center + 2); pg++) {
+        priority.push(pg);
+    }
+    await renderThumbPages(priority, token);
+    if (token !== thumbRenderToken) return;
+
+    const rest = [];
+    for (let pg = 1; pg <= totalPages.value; pg++) {
+        if (!priority.includes(pg)) rest.push(pg);
+    }
+    for (let i = 0; i < rest.length; i += THUMB_CHUNK_SIZE) {
+        if (token !== thumbRenderToken) return;
+        await renderThumbPages(rest.slice(i, i + THUMB_CHUNK_SIZE), token);
+        if (i + THUMB_CHUNK_SIZE < rest.length) {
+            await yieldToMain();
+        }
     }
 }
 
@@ -379,22 +628,8 @@ function setFsThumbRef(pg, el) {
     }
 }
 
-async function renderVisibleThumbs() {
-    await nextTick();
-    for (let pg = 1; pg <= totalPages.value; pg++) {
-        const { doc, pageNum } = globalToLocal(pg);
-        if (!doc) continue;
-        const canvases = [thumbCanvases.value[pg], fsThumbCanvases.value[pg]].filter(Boolean);
-        if (!canvases.length) continue;
-        const page = await doc.getPage(pageNum);
-        const vp = page.getViewport({ scale: 0.18 });
-        for (const canvas of canvases) {
-            const ctx = canvas.getContext('2d');
-            canvas.width = vp.width;
-            canvas.height = vp.height;
-            await page.render({ canvasContext: ctx, viewport: vp }).promise;
-        }
-    }
+function renderVisibleThumbs() {
+    scheduleThumbRender();
 }
 
 function resetCanvasHostScroll() {
@@ -919,9 +1154,10 @@ watch(globalPage, async (newP, oldP) => {
         const prevFi = globalToLocal(oldP).fileIndex;
         await saveFileIndexAnnotations(prevFi);
     }
+    mainCanvasReady.value = false;
     await renderCurrentPage();
     await nextTick();
-    void renderVisibleThumbs();
+    scheduleThumbRender();
     syncThumbsScroll();
     if (totalPages.value > 0 && newP === totalPages.value && oldP !== undefined && newP !== oldP) {
         emit('last-page-reached');
@@ -937,7 +1173,7 @@ watch(zoomMul, async () => {
 
 watch(totalPages, (n) => {
     if (n > 0) {
-        nextTick(() => void renderVisibleThumbs());
+        nextTick(() => scheduleThumbRender());
     }
 });
 
@@ -951,7 +1187,14 @@ onMounted(() => {
         const host = canvasHostRef.value;
         if (host && typeof ResizeObserver !== 'undefined') {
             resizeObservedEl = host;
-            resizeObserver = new ResizeObserver(() => void renderCurrentPage());
+            resizeObserver = new ResizeObserver(() => {
+                if (resizeDebounceTimer) clearTimeout(resizeDebounceTimer);
+                resizeDebounceTimer = setTimeout(() => {
+                    resizeDebounceTimer = null;
+                    if (!pdfDocs.value.length) return;
+                    void renderCurrentPage();
+                }, RESIZE_DEBOUNCE_MS);
+            });
             resizeObserver.observe(host);
         }
         bindWheelHost();
@@ -975,6 +1218,10 @@ onUnmounted(() => {
     if (saveTimer) clearTimeout(saveTimer);
     if (toastTimer) clearTimeout(toastTimer);
     if (fullscreenNavTimer) clearTimeout(fullscreenNavTimer);
+    if (resizeDebounceTimer) clearTimeout(resizeDebounceTimer);
+    resizeDebounceTimer = null;
+    clearRenderRetry();
+    cancelThumbRender();
     if (renderTask) {
         try {
             renderTask.cancel();
@@ -1016,8 +1263,12 @@ const showFullscreenPageNav = computed(
 
 /** Host do PDF no modo aula: no mobile/tela cheia, scroll + gestos touch */
 const pdfCanvasHostClasses = computed(() => {
-    /** h-0 + flex-1: força altura limitada pelo pai para overflow-auto funcionar */
-    const shell = 'relative h-0 min-h-0 min-w-0 flex-1 overflow-auto';
+    const shell = [
+        'relative min-h-0 min-w-0 flex-1 overflow-auto',
+        loading.value && isLessonVariant.value ? 'min-h-[280px]' : '',
+    ]
+        .filter(Boolean)
+        .join(' ');
     if (!isLessonVariant.value) {
         return `${shell} flex aspect-video items-start justify-center bg-zinc-950/80 p-3`;
     }
@@ -1033,11 +1284,17 @@ const pdfCanvasHostClasses = computed(() => {
         }
         return classes;
     }
-    return [
+    const classes = [
         shell,
         'pdf-lesson-desktop-scroll-host bg-[var(--lesson-pdf-bg)]',
         isFullscreen.value ? 'p-3' : 'p-4 sm:p-6',
     ];
+    if (zoomMul.value > 1.01) {
+        classes.push('pdf-lesson-desktop-scroll-host--zoomed');
+    } else {
+        classes.push('pdf-lesson-desktop-scroll-host--fit');
+    }
+    return classes;
 });
 
 const lessonMobileScrollInner = computed(
@@ -1046,19 +1303,27 @@ const lessonMobileScrollInner = computed(
 
 const lessonScrollShellClass = computed(() => {
     if (isLessonDesktopViewer.value) {
-        return zoomMul.value <= 1.01
-            ? 'pdf-lesson-scroll-content pdf-lesson-scroll-content--fit'
-            : 'pdf-lesson-scroll-content pdf-lesson-scroll-content--zoomed';
+        return 'pdf-lesson-scroll-content';
     }
     if (lessonMobileScrollInner.value) return '';
     return 'relative mx-auto';
 });
 
 const lessonCanvasWrapClass = computed(() => {
-    if (!isLessonVariant.value) return 'relative inline-block';
-    if (isLessonDesktopViewer.value) return 'relative pdf-lesson-canvas-wrap';
-    if (lessonMobileScrollInner.value) return 'relative pdf-lesson-mobile-inner';
-    return 'relative inline-block';
+    const base = [];
+    if (!isLessonVariant.value) {
+        base.push('relative', 'inline-block');
+    } else if (isLessonDesktopViewer.value) {
+        base.push('relative', 'pdf-lesson-canvas-wrap');
+    } else if (lessonMobileScrollInner.value) {
+        base.push('relative', 'pdf-lesson-mobile-inner');
+    } else {
+        base.push('relative', 'inline-block');
+    }
+    if (loading.value) {
+        base.push('pdf-lesson-canvas-wrap--loading');
+    }
+    return base;
 });
 
 watch(isDesktopViewport, (isDesktop) => {
@@ -1307,7 +1572,21 @@ watch([isLessonVariant, loading, error], () => {
                                 :class="isLessonVariant ? 'pdf-lesson-main-canvas block shadow-lg' : 'max-w-full shadow-lg'"
                             />
                             <div
-                                v-if="!loading && !error && totalPages > 0"
+                                v-if="loading"
+                                class="absolute inset-0 z-[4] flex min-h-[200px] min-w-[160px] items-center justify-center text-sm"
+                                :class="isLessonVariant ? 'bg-white/80 text-[var(--lesson-text-2)]' : 'bg-zinc-950/60 text-zinc-300'"
+                            >
+                                Carregando...
+                            </div>
+                            <div
+                                v-else-if="error"
+                                class="absolute inset-0 z-[4] flex items-center justify-center p-4 text-center text-sm text-red-600"
+                                :class="isLessonVariant ? 'bg-white/90' : 'bg-zinc-950/80 text-red-200'"
+                            >
+                                {{ error }}
+                            </div>
+                            <div
+                                v-if="mainCanvasReady && !loading && !error && totalPages > 0"
                                 class="absolute inset-0 z-[3]"
                                 :class="highlightColor ? 'pointer-events-auto' : 'pointer-events-none'"
                                 @pointerdown.prevent="overlayPointerDown"
@@ -1378,21 +1657,6 @@ watch([isLessonVariant, loading, error], () => {
                                 <canvas ref="nextPeekCanvasRef" class="block h-auto w-full" />
                             </div>
                         </button>
-
-                        <div
-                            v-if="loading"
-                            class="absolute inset-0 z-[4] flex items-center justify-center text-sm"
-                            :class="isLessonVariant ? 'bg-white/70 text-[var(--lesson-text-2)]' : 'bg-zinc-950/60 text-zinc-300'"
-                        >
-                            Carregando...
-                        </div>
-                        <div
-                            v-else-if="error"
-                            class="absolute inset-0 z-[4] flex items-center justify-center p-4 text-center text-sm text-red-600"
-                            :class="isLessonVariant ? 'bg-white/90' : 'bg-zinc-950/80 text-red-200'"
-                        >
-                            {{ error }}
-                        </div>
                     </div>
                 </div>
 
@@ -1506,20 +1770,26 @@ watch([isLessonVariant, loading, error], () => {
     -webkit-overflow-scrolling: touch;
 }
 
-.pdf-lesson-scroll-content--fit {
-    box-sizing: border-box;
+.pdf-lesson-desktop-scroll-host--fit {
     display: flex;
     align-items: center;
     justify-content: center;
-    min-height: 100%;
-    width: 100%;
 }
 
-.pdf-lesson-scroll-content--zoomed {
-    box-sizing: border-box;
+.pdf-lesson-desktop-scroll-host--zoomed {
     display: block;
-    width: 100%;
     text-align: center;
+}
+
+.pdf-lesson-scroll-content {
+    box-sizing: border-box;
+    width: 100%;
+    flex-shrink: 0;
+}
+
+.pdf-lesson-canvas-wrap--loading {
+    min-height: 200px;
+    min-width: 160px;
 }
 
 .pdf-lesson-canvas-wrap {
@@ -1543,7 +1813,6 @@ watch([isLessonVariant, loading, error], () => {
 .pdf-lesson-mobile-inner {
     display: inline-block;
     min-width: 100%;
-    min-height: 100%;
     vertical-align: top;
     text-align: left;
     box-sizing: border-box;

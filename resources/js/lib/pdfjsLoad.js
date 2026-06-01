@@ -15,6 +15,7 @@ export function isSameOriginPdfUrl(url) {
 export function getPdfDocumentOptions(url, extra = {}) {
     return {
         url,
+        /** Rotas /aula/{id}/pdf/{i} no mesmo domínio: cookies + Range (206) do proxy Laravel */
         withCredentials: isSameOriginPdfUrl(url),
         disableWorker: extra.disableWorker ?? false,
         ...extra,
