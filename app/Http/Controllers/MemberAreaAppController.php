@@ -547,7 +547,9 @@ class MemberAreaAppController extends Controller
             'Content-Type' => $remote->header('Content-Type') ?: 'application/pdf',
             'Content-Disposition' => $disposition,
             'Accept-Ranges' => 'bytes',
-            'Cache-Control' => 'private, max-age=86400',
+            'Cache-Control' => $download
+                ? 'private, max-age=86400'
+                : 'private, no-cache, must-revalidate',
             'X-Content-Type-Options' => 'nosniff',
             'X-Accel-Buffering' => 'no',
         ];

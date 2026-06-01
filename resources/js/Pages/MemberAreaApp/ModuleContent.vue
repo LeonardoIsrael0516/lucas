@@ -11,6 +11,7 @@ import LessonPdfIntro from '@/components/LessonPdfIntro.vue';
 import LessonPdfActionBar from '@/components/LessonPdfActionBar.vue';
 import axios from 'axios';
 import { formatLessonDescription } from '@/lib/utils';
+import { fingerprintPdfSources, lessonPdfProxyUrl } from '@/lib/pdfLessonFiles';
 import { Link as LinkIcon, ChevronLeft, List, Menu, FileText } from 'lucide-vue-next';
 
 defineOptions({ layout: MemberAreaAppLayout });
@@ -102,9 +103,11 @@ function normalizePdfFiles(lesson, defaultName = 'Material') {
 
 function pdfPresentationViewerFiles(slug, lesson, defaultName = 'Apresentação') {
     const norm = normalizePdfFiles(lesson, defaultName);
+    const version = fingerprintPdfSources(norm);
+    const base = `/m/${slug}`;
     return norm.map((f, i) => ({
         ...f,
-        url: `/m/${slug}/aula/${lesson.id}/pdf/${i}`,
+        url: lessonPdfProxyUrl(base, lesson.id, i, version),
     }));
 }
 
@@ -123,10 +126,11 @@ const memberAreaBaseUrl = computed(() => {
 
 function pdfReaderViewerFiles(lesson, defaultName = 'Documento') {
     const norm = normalizePdfFiles(lesson, defaultName);
+    const version = fingerprintPdfSources(norm);
     const p = memberAreaBaseUrl.value;
     return norm.map((f, i) => ({
         ...f,
-        url: `${p}/aula/${lesson.id}/pdf/${i}`,
+        url: lessonPdfProxyUrl(p, lesson.id, i, version),
     }));
 }
 
@@ -135,6 +139,18 @@ const currentPdfReaderFiles = computed(() =>
         ? pdfReaderViewerFiles(props.current_lesson)
         : []
 );
+
+const pdfReaderComponentKey = computed(() => {
+    if (props.current_lesson?.type !== 'pdf_reader') return '';
+    const norm = normalizePdfFiles(props.current_lesson);
+    return `${props.current_lesson.id}-${fingerprintPdfSources(norm)}`;
+});
+
+const pdfPresentationComponentKey = computed(() => {
+    if (props.current_lesson?.type !== 'pdf_presentation') return '';
+    const norm = normalizePdfFiles(props.current_lesson);
+    return `${props.current_lesson.id}-${fingerprintPdfSources(norm)}`;
+});
 
 const lessonTabsPrimary = computed(
     () => props.config?.theme?.primary || 'var(--student-primary, #0047b3)'
@@ -533,12 +549,15 @@ function onPdfReaderLastPage() {
                             </template>
                             <template v-else-if="showPdfPresentationViewer">
                                 <div class="h-full min-h-0 overflow-auto bg-[var(--lesson-pdf-bg)] p-4">
-                                    <MemberPdfPresentationViewer :files="currentPresentationFiles" />
+                                    <MemberPdfPresentationViewer
+                                        :key="pdfPresentationComponentKey"
+                                        :files="currentPresentationFiles"
+                                    />
                                 </div>
                             </template>
                             <template v-else-if="showPdfReaderViewer">
                                 <MemberPdfReader
-                                    :key="`${current_lesson.id}-open`"
+                                    :key="pdfReaderComponentKey"
                                     variant="lesson"
                                     class="h-full"
                                     hide-like-button

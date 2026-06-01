@@ -1,5 +1,7 @@
 <script setup>
 import { ref, shallowRef, watch, onMounted, onUnmounted, computed, nextTick, defineExpose } from 'vue';
+import { usePage } from '@inertiajs/vue3';
+import { resolveStudentAreaLogoUrl } from '@/composables/useStudentAreaLogo';
 import * as pdfjsLib from 'pdfjs-dist';
 import PdfJsWorker from 'pdfjs-dist/build/pdf.worker.min.mjs?worker';
 import PdfJsWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
@@ -44,6 +46,38 @@ const props = defineProps({
 });
 
 const isLessonVariant = computed(() => props.variant === 'lesson');
+
+/** Logo do white label (Settings → White Label), igual sidebar / hub do aluno */
+const loadingLogoUrl = computed(() => {
+    const branding = page.props.student_branding ?? {};
+    const fromWhiteLabel = resolveStudentAreaLogoUrl(branding, false, false);
+    if (fromWhiteLabel) {
+        return fromWhiteLabel;
+    }
+
+    const app = page.props.appSettings ?? {};
+    const fromApp =
+        app.app_logo || app.app_logo_dark || app.app_logo_icon || app.app_logo_icon_dark || '';
+    if (String(fromApp).trim()) {
+        return String(fromApp).trim();
+    }
+
+    const cfg = page.props.config ?? {};
+    const fromCourse =
+        cfg.logos?.logo_light || cfg.logos?.logo_dark || cfg.header?.logo_url || '';
+    return String(fromCourse).trim() || null;
+});
+
+const loadingStatusText = computed(() => {
+    if (loadRetryAttempt.value > 1) {
+        return `Tentando novamente (${loadRetryAttempt.value}/${PDF_LOAD_MAX_ATTEMPTS})…`;
+    }
+    return 'Carregando documento…';
+});
+
+function sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 const emit = defineEmits(['last-page-reached']);
 
@@ -99,6 +133,11 @@ const RESIZE_DEBOUNCE_MS = 50;
 const HOST_LAYOUT_WAIT_MS = 4000;
 const RENDER_RETRY_MAX = 12;
 const RENDER_RETRY_DELAY_MS = 120;
+const PDF_LOAD_MAX_ATTEMPTS = 3;
+const PDF_LOAD_RETRY_BASE_MS = 1200;
+
+const page = usePage();
+const loadRetryAttempt = ref(0);
 
 let renderRetryTimer = null;
 const mainCanvasReady = ref(false);
@@ -464,6 +503,33 @@ async function loadRemainingPdfFiles(rest, gen) {
     }
 }
 
+async function loadDocumentsCore(gen, list) {
+    const firstDoc = await loadOnePdfDocument(list[0].url);
+    if (gen !== loadGeneration) {
+        try {
+            await firstDoc.destroy();
+        } catch (_) {}
+        return false;
+    }
+
+    pdfDocs.value = [firstDoc];
+    totalPages.value = firstDoc.numPages;
+    await nextTick();
+    await waitForHostLayout(canvasHostRef.value);
+    if (gen !== loadGeneration) return false;
+    await renderCurrentPage();
+    if (gen !== loadGeneration) return false;
+
+    void loadAnnotations();
+    scheduleThumbRender();
+
+    if (list.length > 1) {
+        void loadRemainingPdfFiles(list.slice(1), gen);
+    }
+
+    return true;
+}
+
 async function loadDocuments() {
     const gen = ++loadGeneration;
     cancelThumbRender();
@@ -472,6 +538,7 @@ async function loadDocuments() {
     mainCanvasReady.value = false;
     loading.value = true;
     error.value = '';
+    loadRetryAttempt.value = 0;
     await destroyDocs();
     totalPages.value = 0;
     globalPage.value = 1;
@@ -484,43 +551,51 @@ async function loadDocuments() {
         return;
     }
 
-    try {
-        const firstDoc = await loadOnePdfDocument(list[0].url);
-        if (gen !== loadGeneration) {
-            try {
-                await firstDoc.destroy();
-            } catch (_) {}
-            return;
-        }
+    let lastError = null;
+    let loaded = false;
 
-        pdfDocs.value = [firstDoc];
-        totalPages.value = firstDoc.numPages;
-        await nextTick();
-        await waitForHostLayout(canvasHostRef.value);
-        if (gen !== loadGeneration) return;
-        await renderCurrentPage();
+    for (let attempt = 1; attempt <= PDF_LOAD_MAX_ATTEMPTS; attempt++) {
         if (gen !== loadGeneration) return;
 
-        void loadAnnotations();
-        scheduleThumbRender();
+        loadRetryAttempt.value = attempt;
+        error.value = '';
 
-        if (list.length > 1) {
-            void loadRemainingPdfFiles(list.slice(1), gen);
-        }
-    } catch (e) {
-        console.error(e);
-        if (gen === loadGeneration) {
-            error.value =
-                'Não foi possível carregar o PDF. Tente atualizar a página ou contacte o suporte se o problema continuar.';
+        if (attempt > 1) {
             await destroyDocs();
+            totalPages.value = 0;
+            globalPage.value = 1;
+            mainCanvasReady.value = false;
+            await sleep(PDF_LOAD_RETRY_BASE_MS * (attempt - 1));
         }
-    } finally {
-        if (gen === loadGeneration) {
-            loading.value = false;
-            await nextTick();
-            scheduleRenderRetry(gen);
+
+        try {
+            const ok = await loadDocumentsCore(gen, list);
+            if (ok && gen === loadGeneration) {
+                loaded = true;
+                break;
+            }
+            if (!ok) return;
+        } catch (e) {
+            lastError = e;
+            console.warn(`[pdf] tentativa ${attempt}/${PDF_LOAD_MAX_ATTEMPTS} falhou`, e);
+            if (gen !== loadGeneration) return;
         }
     }
+
+    if (gen !== loadGeneration) return;
+
+    if (!loaded) {
+        console.error(lastError);
+        error.value =
+            'Não foi possível carregar o PDF. Verifique sua conexão ou tente novamente.';
+        await destroyDocs();
+        loading.value = false;
+        return;
+    }
+
+    loading.value = false;
+    await nextTick();
+    scheduleRenderRetry(gen);
 }
 
 function cancelThumbRender() {
@@ -1139,11 +1214,15 @@ defineExpose({
     hasPdf,
 });
 
-watch(
-    () => props.files,
-    () => void loadDocuments(),
-    { deep: true }
+/** Muda quando troca o PDF na aula (?v= no proxy ou URLs no storage) */
+const filesVersionKey = computed(() =>
+    (props.files || []).map((f) => `${(f?.url ?? '').toString()}|${(f?.name ?? '').toString()}`).join(';;')
 );
+
+watch(filesVersionKey, (next, prev) => {
+    if (prev !== undefined && next === prev) return;
+    void loadDocuments();
+});
 
 watch(globalPage, async (newP, oldP) => {
     resetCanvasHostScroll();
@@ -1573,17 +1652,41 @@ watch([isLessonVariant, loading, error], () => {
                             />
                             <div
                                 v-if="loading"
-                                class="absolute inset-0 z-[4] flex min-h-[200px] min-w-[160px] items-center justify-center text-sm"
-                                :class="isLessonVariant ? 'bg-white/80 text-[var(--lesson-text-2)]' : 'bg-zinc-950/60 text-zinc-300'"
+                                class="absolute inset-0 z-[4] flex min-h-[200px] min-w-[160px] flex-col items-center justify-center gap-3 px-4 text-center"
+                                :class="isLessonVariant ? 'bg-white/85 text-[var(--lesson-text-2)]' : 'bg-zinc-950/60 text-zinc-300'"
                             >
-                                Carregando...
+                                <div
+                                    class="pdf-loader-brand"
+                                    :class="{ 'pdf-loader-brand--has-logo': !!loadingLogoUrl }"
+                                >
+                                    <img
+                                        v-if="loadingLogoUrl"
+                                        :src="loadingLogoUrl"
+                                        alt=""
+                                        class="pdf-loader-logo"
+                                    />
+                                    <div v-else class="pdf-loader-spinner" aria-hidden="true" />
+                                </div>
+                                <p class="text-sm font-medium">{{ loadingStatusText }}</p>
                             </div>
                             <div
                                 v-else-if="error"
-                                class="absolute inset-0 z-[4] flex items-center justify-center p-4 text-center text-sm text-red-600"
-                                :class="isLessonVariant ? 'bg-white/90' : 'bg-zinc-950/80 text-red-200'"
+                                class="absolute inset-0 z-[4] flex flex-col items-center justify-center gap-3 p-4 text-center text-sm"
+                                :class="isLessonVariant ? 'bg-white/90 text-red-600' : 'bg-zinc-950/80 text-red-200'"
                             >
-                                {{ error }}
+                                <p>{{ error }}</p>
+                                <button
+                                    type="button"
+                                    class="rounded-lg border px-4 py-2 text-xs font-semibold transition hover:opacity-90"
+                                    :class="
+                                        isLessonVariant
+                                            ? 'border-[var(--lesson-border)] bg-[var(--lesson-bg)] text-[var(--lesson-text)]'
+                                            : 'border-zinc-600 bg-zinc-800 text-zinc-100'
+                                    "
+                                    @click="loadDocuments"
+                                >
+                                    Tentar novamente
+                                </button>
                             </div>
                             <div
                                 v-if="mainCanvasReady && !loading && !error && totalPages > 0"
@@ -1790,6 +1893,51 @@ watch([isLessonVariant, loading, error], () => {
 .pdf-lesson-canvas-wrap--loading {
     min-height: 200px;
     min-width: 160px;
+}
+
+.pdf-loader-brand {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 56px;
+}
+
+.pdf-loader-brand--has-logo {
+    animation: pdf-loader-float 1.6s ease-in-out infinite;
+}
+
+.pdf-loader-logo {
+    max-height: 56px;
+    max-width: min(180px, 70vw);
+    object-fit: contain;
+    filter: drop-shadow(0 4px 12px rgb(0 0 0 / 0.08));
+}
+
+.pdf-loader-spinner {
+    width: 40px;
+    height: 40px;
+    border: 3px solid rgb(0 0 0 / 0.08);
+    border-top-color: var(--student-primary, #0047b3);
+    border-radius: 50%;
+    animation: pdf-loader-spin 0.85s linear infinite;
+}
+
+@keyframes pdf-loader-float {
+    0%,
+    100% {
+        opacity: 0.72;
+        transform: translateY(2px) scale(0.97);
+    }
+    50% {
+        opacity: 1;
+        transform: translateY(-4px) scale(1);
+    }
+}
+
+@keyframes pdf-loader-spin {
+    to {
+        transform: rotate(360deg);
+    }
 }
 
 .pdf-lesson-canvas-wrap {
