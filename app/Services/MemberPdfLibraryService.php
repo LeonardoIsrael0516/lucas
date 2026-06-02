@@ -30,7 +30,7 @@ class MemberPdfLibraryService
         }
 
         $originalName = $file->getClientOriginalName();
-        $mime = $file->getMimeType() ?: 'application/octet-stream';
+        $mime = MemberPdfLibraryItem::resolveUploadMime($file);
         $extension = $file->getClientOriginalExtension() ?: $this->extensionFromMime($mime);
         $baseName = pathinfo($originalName, PATHINFO_FILENAME);
         $safeBase = preg_replace('/[^a-zA-Z0-9._-]/', '_', $baseName) ?: 'arquivo';
@@ -403,13 +403,283 @@ class MemberPdfLibraryService
     }
 
     /**
+     * Substitui o arquivo PDF mantendo o mesmo item da biblioteca e atualiza as aulas que o referenciam.
+     *
+     * @return array{item: MemberPdfLibraryItem, url: string, lessons_updated: int}
+     */
+    public function replacePdfItem(MemberPdfLibraryItem $item, UploadedFile $file, ?string $name = null): array
+    {
+        $mime = MemberPdfLibraryItem::resolveUploadMime($file);
+        if (MemberPdfLibraryItem::resolveMediaType($mime) !== MemberPdfLibraryItem::TYPE_PDF) {
+            throw ValidationException::withMessages([
+                'file' => ['Envie um arquivo PDF para substituir este item.'],
+            ]);
+        }
+
+        $maxKb = $this->maxKbForMime($mime);
+        $maxBytes = $maxKb * 1024;
+        if ($file->getSize() > $maxBytes) {
+            throw ValidationException::withMessages([
+                'file' => ['O PDF deve ter no máximo '.(int) max(1, floor($maxKb / 1024)).' MB.'],
+            ]);
+        }
+
+        $oldUrl = $this->publicUrl($item);
+        $path = str_replace('\\', '/', $item->storage_path);
+        $directory = dirname($path);
+        $basename = basename($path);
+        if (! str_ends_with(strtolower($basename), '.pdf')) {
+            $basename = pathinfo($basename, PATHINFO_FILENAME).'.pdf';
+            $path = $directory.'/'.$basename;
+        }
+
+        $this->storage->putFileAs($directory, $file, $basename);
+
+        $displayName = $name !== null && trim($name) !== ''
+            ? mb_substr(trim($name), 0, 255)
+            : mb_substr($file->getClientOriginalName(), 0, 255);
+
+        $item->update([
+            'storage_path' => $path,
+            'name' => $displayName,
+            'mime' => mb_substr($mime, 0, 64),
+            'file_size' => (int) $file->getSize(),
+            'media_type' => MemberPdfLibraryItem::TYPE_PDF,
+        ]);
+
+        $item->refresh();
+
+        $newUrl = $this->urlWithCacheBuster($this->publicUrl($item), $item->updated_at);
+        $lessonsUpdated = $this->syncLibraryItemInLessons($item, $oldUrl, $newUrl);
+
+        return [
+            'item' => $item,
+            'url' => $newUrl,
+            'lessons_updated' => $lessonsUpdated,
+        ];
+    }
+
+    public function syncLibraryItemInLessons(MemberPdfLibraryItem $item, string $oldUrl, string $newUrl): int
+    {
+        $productIds = Product::forTenant($item->tenant_id)->pluck('id')->all();
+        if ($productIds === []) {
+            return 0;
+        }
+
+        $oldReferences = array_values(array_unique(array_filter([
+            trim($oldUrl),
+            $this->urlWithoutCacheBuster($oldUrl),
+            $this->publicUrl($item),
+        ])));
+
+        $updated = 0;
+
+        MemberLesson::query()
+            ->whereIn('product_id', $productIds)
+            ->select(['id', 'content_url', 'content_files', 'attachment_files'])
+            ->chunkById(100, function ($lessons) use ($item, $oldReferences, $newUrl, &$updated): void {
+                foreach ($lessons as $lesson) {
+                    $changes = [];
+
+                    $contentFiles = $this->replaceLibraryReferencesInFileList(
+                        $lesson->content_files,
+                        $item->id,
+                        $oldReferences,
+                        $newUrl
+                    );
+                    if ($contentFiles !== null) {
+                        $changes['content_files'] = $contentFiles;
+                    }
+
+                    $attachmentFiles = $this->replaceLibraryReferencesInFileList(
+                        $lesson->attachment_files,
+                        $item->id,
+                        $oldReferences,
+                        $newUrl
+                    );
+                    if ($attachmentFiles !== null) {
+                        $changes['attachment_files'] = $attachmentFiles;
+                    }
+
+                    if ($this->lessonContentUrlUsesLibraryItem($lesson->content_url, $item->id, $oldReferences)) {
+                        $changes['content_url'] = $newUrl;
+                    }
+
+                    if ($changes !== []) {
+                        $lesson->update($changes);
+                        $updated++;
+                    }
+                }
+            });
+
+        return $updated;
+    }
+
+    /**
+     * @param  mixed  $files
+     * @param  list<string>  $oldUrls
+     * @return list<array<string, mixed>>|null
+     */
+    private function replaceLibraryReferencesInFileList(mixed $files, int $libraryItemId, array $oldUrls, string $newUrl): ?array
+    {
+        if (! is_array($files)) {
+            return null;
+        }
+
+        $changed = false;
+        $next = [];
+
+        foreach ($files as $file) {
+            if (! is_array($file)) {
+                $next[] = $file;
+
+                continue;
+            }
+
+            if ($this->fileEntryUsesLibraryItem($file, $libraryItemId, $oldUrls)) {
+                $entry = $file;
+                $entry['url'] = $newUrl;
+                $entry['library_item_id'] = $libraryItemId;
+                $next[] = $entry;
+                $changed = true;
+
+                continue;
+            }
+
+            $next[] = $file;
+        }
+
+        return $changed ? $next : null;
+    }
+
+    /**
+     * @param  array<string, mixed>  $file
+     * @param  list<string>  $oldUrls
+     */
+    private function fileEntryUsesLibraryItem(array $file, int $libraryItemId, array $oldUrls): bool
+    {
+        if (isset($file['library_item_id']) && (int) $file['library_item_id'] === $libraryItemId) {
+            return true;
+        }
+
+        $url = trim((string) ($file['url'] ?? ''));
+        if ($url === '') {
+            return false;
+        }
+
+        $normalized = $this->urlWithoutCacheBuster($url);
+
+        foreach ($oldUrls as $old) {
+            if ($url === $old || $normalized === $this->urlWithoutCacheBuster($old)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * @param  list<string>  $oldUrls
+     */
+    private function lessonContentUrlUsesLibraryItem(?string $contentUrl, int $libraryItemId, array $oldUrls): bool
+    {
+        $contentUrl = trim((string) $contentUrl);
+        if ($contentUrl === '') {
+            return false;
+        }
+
+        $normalized = $this->urlWithoutCacheBuster($contentUrl);
+        foreach ($oldUrls as $old) {
+            if ($contentUrl === $old || $normalized === $this->urlWithoutCacheBuster($old)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function urlWithCacheBuster(string $url, mixed $updatedAt): string
+    {
+        $base = $this->urlWithoutCacheBuster($url);
+        $timestamp = $updatedAt instanceof \DateTimeInterface
+            ? $updatedAt->getTimestamp()
+            : time();
+
+        return $base.(str_contains($base, '?') ? '&' : '?').'v='.$timestamp;
+    }
+
+    private function urlWithoutCacheBuster(string $url): string
+    {
+        $parts = parse_url($url);
+        if ($parts === false || ! isset($parts['scheme'], $parts['host'])) {
+            return $url;
+        }
+
+        $query = [];
+        if (! empty($parts['query'])) {
+            parse_str($parts['query'], $query);
+            unset($query['v']);
+        }
+
+        $rebuilt = $parts['scheme'].'://'.$parts['host'];
+        if (isset($parts['port'])) {
+            $rebuilt .= ':'.$parts['port'];
+        }
+        $rebuilt .= $parts['path'] ?? '';
+        if ($query !== []) {
+            $rebuilt .= '?'.http_build_query($query);
+        }
+        if (isset($parts['fragment'])) {
+            $rebuilt .= '#'.$parts['fragment'];
+        }
+
+        return $rebuilt;
+    }
+
+    /**
+     * @return array<int, mixed>
+     */
+    public function storeFileValidationRules(int $maxKb): array
+    {
+        return [
+            'required',
+            'file',
+            'max:'.$maxKb,
+            function (string $attribute, mixed $value, \Closure $fail): void {
+                if (! $value instanceof UploadedFile) {
+                    return;
+                }
+                if (! $this->isAllowedLibraryUpload($value)) {
+                    $fail('Formato não suportado. Use imagens, PDF, documentos Office, ZIP ou TXT.');
+                }
+            },
+        ];
+    }
+
+    public function isAllowedLibraryUpload(UploadedFile $file): bool
+    {
+        $ext = strtolower(ltrim((string) $file->getClientOriginalExtension(), '.'));
+        if ($ext !== '' && in_array($ext, $this->allowedExtensions(), true)) {
+            return true;
+        }
+
+        $mime = MemberPdfLibraryItem::resolveUploadMime($file);
+        if (MemberPdfLibraryItem::resolveMediaType($mime) !== MemberPdfLibraryItem::TYPE_OTHER) {
+            return true;
+        }
+
+        return in_array($mime, config('media_library.store_mimetypes', []), true);
+    }
+
+    /**
      * @return array<int, string>
      */
-    public function storeMimetypesRule(): array
+    public function allowedExtensions(): array
     {
-        $mimes = config('media_library.store_mimetypes', []);
-
-        return ['mimetypes:'.implode(',', $mimes)];
+        return config('media_library.store_extensions', [
+            'pdf', 'jpg', 'jpeg', 'png', 'gif', 'webp', 'zip',
+            'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'txt',
+        ]);
     }
 
     public function maxKbForMime(string $mime): int

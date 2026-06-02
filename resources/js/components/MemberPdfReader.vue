@@ -3,9 +3,11 @@ import { ref, shallowRef, watch, onMounted, onUnmounted, computed, nextTick, def
 import { usePage } from '@inertiajs/vue3';
 import { resolveStudentAreaLogoUrl } from '@/composables/useStudentAreaLogo';
 import * as pdfjsLib from 'pdfjs-dist';
+import { TextLayer } from 'pdfjs-dist';
 import PdfJsWorker from 'pdfjs-dist/build/pdf.worker.min.mjs?worker';
 import PdfJsWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import { loadPdfDocument } from '@/lib/pdfjsLoad';
+import 'pdfjs-dist/web/pdf_viewer.css';
 import axios from 'axios';
 import { Heart, ZoomIn, ZoomOut, Highlighter, Maximize2, Minimize2 } from 'lucide-vue-next';
 let pdfWorkerAvailable = !import.meta.env.DEV;
@@ -174,6 +176,11 @@ let continuousScrollHostEl = null;
 let pageScrollSyncSuppress = false;
 let pageScrollRaf = null;
 let documentRenderToken = 0;
+/** @type {Map<number, import('pdfjs-dist').TextLayer>} */
+const textLayerByPage = new Map();
+/** @type {Map<number, HTMLElement>} */
+const textLayerRefs = new Map();
+const singlePageTextLayerRef = ref(null);
 const PDF_PAGE_GAP_PX = 12;
 let pageFlipCooldown = 0;
 const PAGE_FLIP_COOLDOWN_MS = 350;
@@ -278,7 +285,7 @@ function getContinuousPageBlock(pg) {
 
 function getContinuousPageCanvas(pg) {
     const block = getContinuousPageBlock(pg);
-    return block?.querySelector('canvas.pdf-lesson-page-canvas') ?? null;
+    return block?.querySelector('.pdf-page-surface canvas.pdf-lesson-page-canvas') ?? null;
 }
 
 /**
@@ -492,6 +499,75 @@ function continuousPagePaintOrder() {
     return order;
 }
 
+function cancelTextLayerForPage(pg) {
+    const layer = textLayerByPage.get(pg);
+    if (!layer) return;
+    try {
+        layer.cancel();
+    } catch (_) {}
+    textLayerByPage.delete(pg);
+}
+
+function cancelAllTextLayers() {
+    for (const pg of [...textLayerByPage.keys()]) {
+        cancelTextLayerForPage(pg);
+    }
+}
+
+function setTextLayerRef(pg, el) {
+    if (el) {
+        textLayerRefs.set(pg, el);
+    } else {
+        textLayerRefs.delete(pg);
+    }
+}
+
+function resolveTextLayerContainer(pg) {
+    if (useContinuousScroll.value) {
+        return textLayerRefs.get(pg) ?? null;
+    }
+    return singlePageTextLayerRef.value;
+}
+
+async function renderPageTextLayer(pg, canvas, layoutHost, page, fitScale) {
+    const container = resolveTextLayerContainer(pg);
+    if (!container) return;
+
+    cancelTextLayerForPage(pg);
+    container.replaceChildren();
+
+    const textViewport = page.getViewport({ scale: fitScale });
+
+    let textContent;
+    try {
+        textContent = await page.getTextContent();
+    } catch (e) {
+        console.warn('[pdf] getTextContent', e);
+        container.style.display = 'none';
+        return;
+    }
+
+    if (!textContent?.items?.length) {
+        container.style.display = 'none';
+        return;
+    }
+
+    container.style.display = '';
+    const layer = new TextLayer({
+        textContentSource: textContent,
+        container,
+        viewport: textViewport,
+    });
+    textLayerByPage.set(pg, layer);
+    try {
+        await layer.render();
+    } catch (e) {
+        if (e?.name !== 'RenderingCancelledException') {
+            console.warn('[pdf] text layer', e);
+        }
+    }
+}
+
 async function renderPageToCanvas(pg, canvas, layoutBox = null) {
     const host = canvasHostRef.value;
     if (!canvas || !host || !pdfDocs.value.length) return false;
@@ -502,7 +578,8 @@ async function renderPageToCanvas(pg, canvas, layoutBox = null) {
     const page = await doc.getPage(pageNum);
     const outputScale = window.devicePixelRatio || 1;
     const baseViewport = page.getViewport({ scale: 1 });
-    const fit = computePageFitScale(baseViewport, layoutBox ?? host);
+    const layoutHost = layoutBox ?? host;
+    const fit = computePageFitScale(baseViewport, layoutHost);
     const viewport = page.getViewport({ scale: fit * outputScale });
 
     const ctx = canvas.getContext('2d');
@@ -519,7 +596,11 @@ async function renderPageToCanvas(pg, canvas, layoutBox = null) {
         if (e?.name !== 'RenderingCancelledException') console.warn(e);
         return false;
     }
-    return canvas.width > 16 && canvas.height > 16;
+    const ok = canvas.width > 16 && canvas.height > 16;
+    if (ok) {
+        await renderPageTextLayer(pg, canvas, layoutHost, page, fit);
+    }
+    return ok;
 }
 
 let renderDocumentInFlight = null;
@@ -538,6 +619,7 @@ async function renderDocumentPages() {
         await nextTick();
         await waitForHostLayout(host);
         if (token !== documentRenderToken) return;
+        await nextTick();
 
         const layoutBox = hostContentBox(host);
         let anyPainted = false;
@@ -621,7 +703,11 @@ async function renderCurrentPage() {
         if (e?.name !== 'RenderingCancelledException') console.warn(e);
     }
     renderTask = null;
-    mainCanvasReady.value = canvas.width > 16 && canvas.height > 16;
+    const ok = canvas.width > 16 && canvas.height > 16;
+    mainCanvasReady.value = ok;
+    if (ok) {
+        await renderPageTextLayer(globalPage.value, canvas, host, page, fit);
+    }
     void renderNextPeek();
     await nextTick();
     if (isLessonDesktopViewer.value) {
@@ -649,6 +735,8 @@ async function renderNextPeek() {
 
 async function destroyDocs() {
     documentRenderToken += 1;
+    cancelAllTextLayers();
+    textLayerRefs.clear();
     pdfDocumentReady.value = false;
     thumbsRenderedPages.clear();
     for (const d of pdfDocs.value) {
@@ -2079,26 +2167,23 @@ watch([isLessonVariant, loading, error], () => {
                                         class="pdf-lesson-page-block"
                                         :data-pdf-page="pg"
                                     >
-                                        <canvas
-                                            class="pdf-lesson-main-canvas pdf-lesson-page-canvas block shadow-lg"
-                                        />
+                                        <div class="pdf-page-surface relative inline-block">
+                                            <canvas
+                                                class="pdf-lesson-main-canvas pdf-lesson-page-canvas pointer-events-none block shadow-lg"
+                                            />
+                                            <div
+                                                :ref="(el) => setTextLayerRef(pg, el)"
+                                                class="textLayer absolute inset-0 z-[4]"
+                                            />
+                                        </div>
                                         <div
-                                            v-if="pdfDocumentReady"
-                                            class="absolute inset-0 z-[3]"
-                                            :class="
-                                                highlightColor && pg === globalPage
-                                                    ? 'pointer-events-auto'
-                                                    : 'pointer-events-none'
-                                            "
-                                            @pointerdown.prevent="overlayPointerDown(pg, $event)"
-                                            @pointermove.prevent="overlayPointerMove(pg, $event)"
-                                            @pointerup.prevent="overlayPointerUp(pg, $event)"
-                                            @pointerleave="overlayPointerUp(pg, $event)"
+                                            v-if="pdfDocumentReady && highlightsForPage(pg).length"
+                                            class="pdf-highlights-layer pointer-events-none absolute inset-0 z-[5]"
                                         >
                                             <div
                                                 v-for="h in highlightsForPage(pg)"
                                                 :key="h.id"
-                                                class="pointer-events-auto absolute cursor-pointer mix-blend-multiply"
+                                                class="pointer-events-none absolute mix-blend-multiply"
                                                 :class="{
                                                     'bg-yellow-400/45': h.color === 'yellow',
                                                     'bg-green-400/45': h.color === 'green',
@@ -2110,11 +2195,19 @@ watch([isLessonVariant, loading, error], () => {
                                                     width: `${h.width * 100}%`,
                                                     height: `${h.height * 100}%`,
                                                 }"
-                                                title="Duplo clique para remover"
-                                                @dblclick.prevent="removeHighlight(h.id)"
+                                                title="Marcação salva"
                                             />
+                                        </div>
+                                        <div
+                                            v-if="pdfDocumentReady && highlightColor && pg === globalPage"
+                                            class="pdf-highlight-draw-layer absolute inset-0 z-[6] touch-none"
+                                            @pointerdown.prevent="overlayPointerDown(pg, $event)"
+                                            @pointermove.prevent="overlayPointerMove(pg, $event)"
+                                            @pointerup.prevent="overlayPointerUp(pg, $event)"
+                                            @pointerleave="overlayPointerUp(pg, $event)"
+                                        >
                                             <div
-                                                v-if="selectionRectCss && selecting && pg === globalPage"
+                                                v-if="selectionRectCss && selecting"
                                                 class="pointer-events-none absolute border-2 border-dashed border-amber-300 bg-amber-400/20"
                                                 :style="selectionRectCss"
                                             />
@@ -2122,23 +2215,28 @@ watch([isLessonVariant, loading, error], () => {
                                     </div>
                                 </div>
                                 <template v-else>
-                                    <canvas
-                                        ref="canvasRef"
-                                        :class="isLessonVariant ? 'pdf-lesson-main-canvas block shadow-lg' : 'max-w-full shadow-lg'"
-                                    />
+                                    <div class="pdf-page-surface relative inline-block">
+                                        <canvas
+                                            ref="canvasRef"
+                                            :class="
+                                                isLessonVariant
+                                                    ? 'pdf-lesson-main-canvas pointer-events-none block shadow-lg'
+                                                    : 'pointer-events-none max-w-full shadow-lg'
+                                            "
+                                        />
+                                        <div
+                                            ref="singlePageTextLayerRef"
+                                            class="textLayer absolute inset-0 z-[4]"
+                                        />
+                                    </div>
                                     <div
-                                        v-if="mainCanvasReady && !loading && !error && totalPages > 0"
-                                        class="absolute inset-0 z-[3]"
-                                        :class="highlightColor ? 'pointer-events-auto' : 'pointer-events-none'"
-                                        @pointerdown.prevent="overlayPointerDown(globalPage, $event)"
-                                        @pointermove.prevent="overlayPointerMove(globalPage, $event)"
-                                        @pointerup.prevent="overlayPointerUp(globalPage, $event)"
-                                        @pointerleave="overlayPointerUp(globalPage, $event)"
+                                        v-if="mainCanvasReady && !loading && !error && currentPageHighlights.length"
+                                        class="pdf-highlights-layer pointer-events-none absolute inset-0 z-[5]"
                                     >
                                         <div
                                             v-for="h in currentPageHighlights"
                                             :key="h.id"
-                                            class="pointer-events-auto absolute cursor-pointer mix-blend-multiply"
+                                            class="pointer-events-none absolute mix-blend-multiply"
                                             :class="{
                                                 'bg-yellow-400/45': h.color === 'yellow',
                                                 'bg-green-400/45': h.color === 'green',
@@ -2150,9 +2248,17 @@ watch([isLessonVariant, loading, error], () => {
                                                 width: `${h.width * 100}%`,
                                                 height: `${h.height * 100}%`,
                                             }"
-                                            title="Duplo clique para remover"
-                                            @dblclick.prevent="removeHighlight(h.id)"
+                                            title="Marcação salva"
                                         />
+                                    </div>
+                                    <div
+                                        v-if="mainCanvasReady && !loading && !error && totalPages > 0 && highlightColor"
+                                        class="pdf-highlight-draw-layer absolute inset-0 z-[6] touch-none"
+                                        @pointerdown.prevent="overlayPointerDown(globalPage, $event)"
+                                        @pointermove.prevent="overlayPointerMove(globalPage, $event)"
+                                        @pointerup.prevent="overlayPointerUp(globalPage, $event)"
+                                        @pointerleave="overlayPointerUp(globalPage, $event)"
+                                    >
                                         <div
                                             v-if="selectionRectCss && selecting"
                                             class="pointer-events-none absolute border-2 border-dashed border-amber-300 bg-amber-400/20"
@@ -2388,8 +2494,23 @@ watch([isLessonVariant, loading, error], () => {
     flex: 0 0 auto;
     max-width: none;
     margin: 0 auto 12px;
-    line-height: 0;
+    line-height: normal;
     vertical-align: top;
+}
+
+.pdf-page-surface {
+    line-height: 0;
+}
+
+.pdf-page-surface .textLayer {
+    line-height: 1;
+    user-select: text;
+    -webkit-user-select: text;
+}
+
+.pdf-highlights-layer,
+.pdf-highlight-draw-layer {
+    line-height: normal;
 }
 
 .pdf-lesson-page-block:last-child {

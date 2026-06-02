@@ -20,7 +20,7 @@ const libraryRef = ref(null);
 const csrfToken = () => document.querySelector('meta[name="csrf-token"]')?.content ?? '';
 
 function openUpload() {
-    libraryRef.value?.openUploadPanel?.();
+    libraryRef.value?.triggerUploadInFolder?.();
 }
 
 function openNewFolder() {

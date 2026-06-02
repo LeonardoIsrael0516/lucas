@@ -81,20 +81,18 @@ class MemberPdfLibraryController extends Controller
         $this->authorizeProduct($produto);
         $library = $this->libraryForProduct($produto);
 
-        /** @var UploadedFile $file */
+        /** @var UploadedFile|null $file */
         $file = $request->file('file');
-        $mime = $file?->getMimeType() ?: 'application/octet-stream';
+        $mime = $file instanceof UploadedFile
+            ? MemberPdfLibraryItem::resolveUploadMime($file)
+            : 'application/octet-stream';
         $maxKb = $library->maxKbForMime($mime);
 
         $validated = $request->validate([
-            'file' => array_merge(
-                ['required', 'file', 'max:'.$maxKb],
-                $library->storeMimetypesRule()
-            ),
+            'file' => $library->storeFileValidationRules($maxKb),
             'folder_id' => ['nullable', 'integer', 'exists:member_pdf_library_folders,id'],
         ], [
             'file.required' => 'Nenhum arquivo enviado.',
-            'file.mimetypes' => 'Formato não suportado. Use imagens, PDF, documentos Office, ZIP ou TXT.',
             'file.max' => 'O arquivo deve ter no máximo '.(int) max(1, floor($maxKb / 1024)).' MB.',
         ]);
 
@@ -188,6 +186,39 @@ class MemberPdfLibraryController extends Controller
         return response()->json([
             'message' => 'Arquivo movido.',
             'item' => $library->toPublicPayload($item),
+        ]);
+    }
+
+    public function replace(Request $request, Product $produto, MemberPdfLibraryItem $item): JsonResponse
+    {
+        $this->authorizeProduct($produto);
+        $this->authorizeLibraryItem($produto, $item);
+        $library = $this->libraryForProduct($produto);
+
+        $validated = $request->validate([
+            'file' => ['required', 'file', 'mimes:pdf', 'max:'.(int) config('media_library.pdf_max_kb', 51200)],
+            'name' => ['nullable', 'string', 'max:255'],
+        ], [
+            'file.required' => 'Nenhum PDF enviado.',
+            'file.mimes' => 'Envie um arquivo PDF.',
+        ]);
+
+        /** @var \Illuminate\Http\UploadedFile $file */
+        $file = $validated['file'];
+
+        $result = $library->replacePdfItem($item, $file, $validated['name'] ?? null);
+        $item = $result['item']->fresh();
+        $payload = $library->toPublicPayload($item, $library->usageCount($item));
+        $lessonsUpdated = (int) $result['lessons_updated'];
+
+        return response()->json([
+            'message' => $lessonsUpdated > 0
+                ? "PDF atualizado. {$lessonsUpdated} aula(s) passaram a usar o novo arquivo."
+                : 'PDF atualizado na biblioteca.',
+            'item' => $payload,
+            'url' => $payload['url'],
+            'library_item_id' => $item->id,
+            'lessons_updated' => $lessonsUpdated,
         ]);
     }
 

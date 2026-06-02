@@ -347,6 +347,7 @@ Route::middleware(['auth', 'admin.tenant', 'role:admin|infoprodutor|team', 'audi
         Route::patch('/biblioteca/folders/{folder}', [\App\Http\Controllers\TenantMediaLibraryController::class, 'updateFolder'])->name('biblioteca.folders.update');
         Route::delete('/biblioteca/folders/{folder}', [\App\Http\Controllers\TenantMediaLibraryController::class, 'destroyFolder'])->name('biblioteca.folders.destroy');
         Route::patch('/biblioteca/items/{item}/move', [\App\Http\Controllers\TenantMediaLibraryController::class, 'moveItem'])->name('biblioteca.items.move');
+        Route::post('/biblioteca/items/{item}/replace', [\App\Http\Controllers\TenantMediaLibraryController::class, 'replace'])->name('biblioteca.items.replace');
         Route::delete('/biblioteca/items/{item}', [\App\Http\Controllers\TenantMediaLibraryController::class, 'destroy'])->name('biblioteca.items.destroy');
 
         // Member Builder (área de membros do produto)
@@ -363,6 +364,7 @@ Route::middleware(['auth', 'admin.tenant', 'role:admin|infoprodutor|team', 'audi
         Route::patch('/produtos/{produto}/member-builder/pdf-library/folders/{folder}', [\App\Http\Controllers\MemberPdfLibraryController::class, 'updateFolder'])->name('member-builder.pdf-library.folders.update');
         Route::delete('/produtos/{produto}/member-builder/pdf-library/folders/{folder}', [\App\Http\Controllers\MemberPdfLibraryController::class, 'destroyFolder'])->name('member-builder.pdf-library.folders.destroy');
         Route::patch('/produtos/{produto}/member-builder/pdf-library/{item}/move', [\App\Http\Controllers\MemberPdfLibraryController::class, 'moveItem'])->name('member-builder.pdf-library.move');
+        Route::post('/produtos/{produto}/member-builder/pdf-library/{item}/replace', [\App\Http\Controllers\MemberPdfLibraryController::class, 'replace'])->name('member-builder.pdf-library.replace');
         Route::delete('/produtos/{produto}/member-builder/pdf-library/{item}', [\App\Http\Controllers\MemberPdfLibraryController::class, 'destroy'])->name('member-builder.pdf-library.destroy');
         Route::post('/produtos/{produto}/member-builder/upload-badge', [\App\Http\Controllers\MemberBuilderController::class, 'uploadBadge'])->name('member-builder.upload-badge');
         Route::post('/produtos/{produto}/member-builder/sections', [\App\Http\Controllers\MemberBuilderController::class, 'storeSection'])->name('member-builder.sections.store');

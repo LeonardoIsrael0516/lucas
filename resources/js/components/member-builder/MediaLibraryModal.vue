@@ -8,6 +8,7 @@ import {
     Search,
     Upload,
     Trash2,
+    RefreshCw,
     FileText,
     Check,
     Loader2,
@@ -38,6 +39,10 @@ const props = defineProps({
 
 const emit = defineEmits(['close', 'select']);
 
+function triggerUploadPicker() {
+    uploadInput.value?.click();
+}
+
 defineExpose({
     openUploadPanel: () => {
         activePanel.value = 'upload';
@@ -45,6 +50,8 @@ defineExpose({
     openLibraryPanel: () => {
         activePanel.value = 'library';
     },
+    /** Abre o seletor de arquivos; envia para a pasta atualmente selecionada na árvore. */
+    triggerUploadInFolder: triggerUploadPicker,
     refresh: () => fetchItems(1),
 });
 
@@ -73,9 +80,13 @@ const searchQuery = ref('');
 const filterProductId = ref('');
 const selectedIds = ref(new Set());
 const uploadInput = ref(null);
+const replaceInput = ref(null);
+const replacingItemId = ref(null);
+const replacingPdf = ref(false);
 const errorMessage = ref('');
 const movingItemId = ref(null);
 const moveTargetFolderId = ref('');
+const dragOver = ref(false);
 let searchDebounce = null;
 
 const headers = () => ({
@@ -84,10 +95,8 @@ const headers = () => ({
     'X-Requested-With': 'XMLHttpRequest',
 });
 
-const uploadHeaders = () => ({
-    ...headers(),
-    'Content-Type': 'multipart/form-data',
-});
+/** Sem Content-Type fixo: o axios define multipart/form-data com boundary. */
+const uploadHeaders = () => headers();
 
 const selectedCount = computed(() => selectedIds.value.size);
 const canConfirmPick = computed(() => props.mode === 'pick' && selectedCount.value > 0);
@@ -158,6 +167,10 @@ function deleteUrlFor(id) {
 
 function moveUrlFor(id) {
     return `${deleteUrlFor(id)}/move`;
+}
+
+function replaceUrlFor(id) {
+    return `${deleteUrlFor(id)}/replace`;
 }
 
 function folderUpdateUrl(id) {
@@ -266,7 +279,9 @@ async function onUploadFiles(fileList) {
                 selectedIds.value = new Set([...selectedIds.value, data.item.id]);
             }
         }
-        activePanel.value = 'library';
+        if (activePanel.value === 'upload') {
+            activePanel.value = 'library';
+        }
         await fetchItems(1);
     } catch (e) {
         errorMessage.value =
@@ -282,6 +297,62 @@ async function onUploadFiles(fileList) {
 
 function onUploadInputChange(e) {
     onUploadFiles(e.target?.files);
+}
+
+function onUploadDragOver(e) {
+    e.preventDefault();
+    dragOver.value = true;
+}
+
+function onUploadDragLeave() {
+    dragOver.value = false;
+}
+
+function onUploadDrop(e) {
+    e.preventDefault();
+    dragOver.value = false;
+    const files = e.dataTransfer?.files;
+    if (files?.length) {
+        onUploadFiles(files);
+    }
+}
+
+function startReplacePdf(item, e) {
+    e?.stopPropagation();
+    if (item.media_type !== 'pdf') return;
+    replacingItemId.value = item.id;
+    replaceInput.value?.click();
+}
+
+async function onReplaceInputChange(e) {
+    const file = e.target?.files?.[0];
+    const itemId = replacingItemId.value;
+    replacingItemId.value = null;
+    if (replaceInput.value) replaceInput.value.value = '';
+    if (!file || !itemId) return;
+
+    const item = items.value.find((i) => i.id === itemId);
+    const confirmMsg = item?.usage_count > 0
+        ? `Substituir "${item?.name ?? 'este PDF'}"? O novo arquivo será usado em ${item.usage_count} aula(s) vinculada(s).`
+        : `Substituir "${item?.name ?? 'este PDF'}" pelo arquivo selecionado?`;
+    if (!confirm(confirmMsg)) return;
+
+    replacingPdf.value = true;
+    try {
+        const form = new FormData();
+        form.append('file', file);
+        const { data } = await axios.post(replaceUrlFor(itemId), form, { headers: uploadHeaders() });
+        alert(data?.message ?? 'PDF atualizado.');
+        await fetchItems(meta.value.current_page);
+    } catch (err) {
+        alert(
+            err.response?.data?.message ??
+                err.response?.data?.errors?.file?.[0] ??
+                'Não foi possível atualizar o PDF.'
+        );
+    } finally {
+        replacingPdf.value = false;
+    }
 }
 
 async function removeItem(item) {
@@ -457,6 +528,22 @@ onMounted(() => {
                         : 'relative flex h-[min(92vh,900px)] w-full max-w-6xl flex-col overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-2xl dark:border-zinc-700 dark:bg-zinc-900'
                 "
             >
+                <input
+                    ref="replaceInput"
+                    type="file"
+                    accept=".pdf,application/pdf"
+                    class="hidden"
+                    @change="onReplaceInputChange"
+                />
+                <input
+                    ref="uploadInput"
+                    type="file"
+                    :accept="UPLOAD_ACCEPT"
+                    multiple
+                    class="hidden"
+                    @change="onUploadInputChange"
+                />
+
                 <header
                     v-if="!embedded"
                     class="flex shrink-0 items-center justify-between border-b border-zinc-200 px-4 py-3 dark:border-zinc-700"
@@ -590,9 +677,36 @@ onMounted(() => {
                                 <option value="">Todos os cursos</option>
                                 <option v-for="p in tenantProducts" :key="p.id" :value="p.id">{{ p.name }}</option>
                             </select>
+                            <Button
+                                type="button"
+                                size="sm"
+                                variant="outline"
+                                class="shrink-0"
+                                :disabled="uploading"
+                                :title="
+                                    isAtRoot
+                                        ? 'Enviar arquivos para a raiz'
+                                        : `Enviar arquivos para a pasta ${currentFolderLabel}`
+                                "
+                                @click="triggerUploadPicker"
+                            >
+                                <Loader2 v-if="uploading" class="mr-1 h-3.5 w-3.5 animate-spin" />
+                                <Upload v-else class="mr-1 h-3.5 w-3.5" />
+                                {{ uploading ? 'Enviando…' : isAtRoot ? 'Enviar' : 'Enviar aqui' }}
+                            </Button>
                         </div>
 
-                        <div class="min-h-0 flex-1 overflow-y-auto p-4 sm:p-5">
+                        <div
+                            class="min-h-0 flex-1 overflow-y-auto p-4 sm:p-5 transition-colors"
+                            :class="
+                                dragOver
+                                    ? 'bg-sky-50/80 ring-2 ring-inset ring-sky-400 dark:bg-sky-950/30 dark:ring-sky-500'
+                                    : ''
+                            "
+                            @dragover="onUploadDragOver"
+                            @dragleave="onUploadDragLeave"
+                            @drop="onUploadDrop"
+                        >
                             <p
                                 v-if="errorMessage"
                                 class="mb-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950/40 dark:text-red-300"
@@ -602,13 +716,20 @@ onMounted(() => {
                             <div v-if="loading" class="flex min-h-[240px] items-center justify-center text-zinc-500">
                                 <Loader2 class="h-8 w-8 animate-spin" />
                             </div>
-                            <p
+                            <div
                                 v-else-if="!hasGridContent"
-                                class="flex min-h-[240px] items-center justify-center text-center text-sm text-zinc-500"
+                                class="flex min-h-[240px] flex-col items-center justify-center gap-3 px-4 text-center text-sm text-zinc-500"
                             >
-                                <span v-if="isAtRoot">Nenhum arquivo na raiz. Envie mídia ou selecione uma pasta.</span>
-                                <span v-else>Nenhum arquivo nesta pasta. Expanda subpastas na árvore ou envie arquivos aqui.</span>
-                            </p>
+                                <p v-if="isAtRoot">Nenhum arquivo na raiz. Envie mídia ou selecione uma pasta.</p>
+                                <p v-else>
+                                    Nenhum arquivo em <strong class="text-zinc-700 dark:text-zinc-300">{{ currentFolderLabel }}</strong>.
+                                    Envie arquivos para esta pasta ou arraste-os aqui.
+                                </p>
+                                <Button type="button" size="sm" :disabled="uploading" @click="triggerUploadPicker">
+                                    <Upload class="mr-1.5 h-4 w-4" />
+                                    {{ uploading ? 'Enviando…' : isAtRoot ? 'Enviar na raiz' : 'Enviar nesta pasta' }}
+                                </Button>
+                            </div>
                             <div v-else class="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
                                 <article
                                     v-for="item in items"
@@ -673,6 +794,16 @@ onMounted(() => {
                                                 @click.stop="startMove(item, $event)"
                                             >
                                                 Mover
+                                            </button>
+                                            <button
+                                                v-if="mode !== 'pick' && item.media_type === 'pdf'"
+                                                type="button"
+                                                class="rounded-md bg-white/95 p-1.5 text-zinc-500 shadow-sm hover:bg-sky-50 hover:text-sky-700 disabled:opacity-40 dark:bg-zinc-900/95"
+                                                :disabled="replacingPdf"
+                                                title="Substituir PDF (atualiza aulas vinculadas)"
+                                                @click.stop="startReplacePdf(item, $event)"
+                                            >
+                                                <RefreshCw class="h-3.5 w-3.5" :class="replacingPdf && replacingItemId === item.id ? 'animate-spin' : ''" />
                                             </button>
                                             <button
                                                 type="button"
@@ -765,14 +896,6 @@ onMounted(() => {
                         Os arquivos serão salvos em: <strong>{{ currentFolder.name }}</strong>
                     </p>
                     <p v-else class="text-center text-sm text-zinc-500">Salvar na raiz da biblioteca</p>
-                    <input
-                        ref="uploadInput"
-                        type="file"
-                        :accept="UPLOAD_ACCEPT"
-                        multiple
-                        class="hidden"
-                        @change="onUploadInputChange"
-                    />
                     <div
                         class="flex w-full max-w-xl flex-col items-center rounded-xl border-2 border-dashed border-zinc-300 px-8 py-14 dark:border-zinc-600"
                     >
@@ -783,7 +906,7 @@ onMounted(() => {
                         <p class="mb-4 text-center text-xs text-zinc-500">
                             Limites variam por tipo (PDF até {{ pdfMaxMb }} MB)
                         </p>
-                        <Button type="button" :disabled="uploading" @click="uploadInput?.click()">
+                        <Button type="button" :disabled="uploading" @click="triggerUploadPicker">
                             <Loader2 v-if="uploading" class="mr-2 h-4 w-4 animate-spin" />
                             {{ uploading ? 'Enviando…' : 'Selecionar arquivos' }}
                         </Button>
