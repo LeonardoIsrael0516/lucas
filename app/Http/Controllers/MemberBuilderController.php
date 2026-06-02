@@ -30,6 +30,7 @@ use App\Services\TeamAccessService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Illuminate\View\View;
 use Inertia\Inertia;
@@ -1012,6 +1013,78 @@ class MemberBuilderController extends Controller
             return response()->json(['message' => 'Módulo atualizado.']);
         }
         return back()->with('success', 'Módulo atualizado.');
+    }
+
+    public function reorderModules(Request $request, Product $produto): JsonResponse
+    {
+        $this->authorizeProduct($produto);
+
+        $validated = $request->validate([
+            'order' => ['required', 'array', 'min:1'],
+            'order.*' => ['integer', 'distinct'],
+        ]);
+
+        $ids = array_values(array_map('intval', $validated['order']));
+
+        $modules = MemberModule::query()
+            ->where('product_id', $produto->id)
+            ->whereNull('related_product_id')
+            ->whereNull('external_url')
+            ->whereIn('id', $ids)
+            ->get()
+            ->keyBy('id');
+
+        if ($modules->count() !== count($ids)) {
+            return response()->json(['message' => 'Ordem de módulos inválida.'], 422);
+        }
+
+        DB::transaction(function () use ($ids, $modules): void {
+            foreach ($ids as $index => $id) {
+                $modules[$id]->update(['position' => $index + 1]);
+            }
+        });
+
+        return response()->json([
+            'message' => 'Ordem dos módulos atualizada.',
+            'order' => $ids,
+        ]);
+    }
+
+    public function reorderLessons(Request $request, Product $produto, MemberModule $module): JsonResponse
+    {
+        $this->authorizeProduct($produto);
+        if ($module->product_id !== $produto->id) {
+            abort(404);
+        }
+
+        $validated = $request->validate([
+            'order' => ['required', 'array', 'min:1'],
+            'order.*' => ['integer', 'distinct'],
+        ]);
+
+        $ids = array_values(array_map('intval', $validated['order']));
+
+        $lessons = MemberLesson::query()
+            ->where('member_module_id', $module->id)
+            ->where('product_id', $produto->id)
+            ->whereIn('id', $ids)
+            ->get()
+            ->keyBy('id');
+
+        if ($lessons->count() !== count($ids)) {
+            return response()->json(['message' => 'Ordem de aulas inválida.'], 422);
+        }
+
+        DB::transaction(function () use ($ids, $lessons): void {
+            foreach ($ids as $index => $id) {
+                $lessons[$id]->update(['position' => $index + 1]);
+            }
+        });
+
+        return response()->json([
+            'message' => 'Ordem das aulas atualizada.',
+            'order' => $ids,
+        ]);
     }
 
     public function destroyModule(Request $request, Product $produto, MemberModule $module): JsonResponse|RedirectResponse

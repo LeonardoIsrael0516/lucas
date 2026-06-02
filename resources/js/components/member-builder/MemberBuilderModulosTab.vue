@@ -3,6 +3,7 @@ import { computed } from 'vue';
 import Button from '@/components/ui/Button.vue';
 import Toggle from '@/components/ui/Toggle.vue';
 import LessonIntroSection from '@/components/member-builder/LessonIntroSection.vue';
+import { useDragReorderList } from '@/composables/useDragReorderList.js';
 import {
     Plus,
     Trash2,
@@ -17,6 +18,7 @@ import {
     Copy,
     ChevronLeft,
     LayoutTemplate,
+    GripVertical,
 } from 'lucide-vue-next';
 
 const props = defineProps({
@@ -27,6 +29,8 @@ const props = defineProps({
     lessonFormSaving: { type: Boolean, default: false },
     commentsEnabled: { type: Boolean, default: false },
     attachmentUploading: { type: Boolean, default: false },
+    modulesReordering: { type: Boolean, default: false },
+    lessonsReordering: { type: Boolean, default: false },
     uploadLimits: {
         type: Object,
         default: () => ({ pdf_max_mb: 50, attachment_max_mb: 50 }),
@@ -60,7 +64,25 @@ const emit = defineEmits([
     'remove-attachment-at',
     'go-comentarios',
     'open-apply-template',
+    'reorder-modules',
+    'reorder-lessons',
 ]);
+
+const sortedLessons = computed(() =>
+    [...(props.selectedModule?.lessons ?? [])].sort(
+        (a, b) => (a.position ?? 0) - (b.position ?? 0)
+    )
+);
+
+const canReorderModules = computed(() => props.modules.length > 1);
+const canReorderLessons = computed(() => sortedLessons.value.length > 1);
+
+const moduleDrag = useDragReorderList((order) => emit('reorder-modules', order));
+const lessonDrag = useDragReorderList((order) => {
+    if (props.selectedModuleId != null) {
+        emit('reorder-lessons', { moduleId: props.selectedModuleId, order });
+    }
+});
 
 function isLessonPdfContentType(type) {
     return type === 'pdf' || type === 'pdf_presentation' || type === 'pdf_reader';
@@ -102,7 +124,9 @@ function onMobileBackToLessons() {
                     Estrutura do curso
                 </h2>
                 <p class="mt-0.5 text-xs text-zinc-500 dark:text-zinc-400">
-                    Módulos à esquerda, aulas no centro e detalhes à direita.
+                    Módulos à esquerda, aulas no centro e detalhes à direita. Arraste pelo ícone
+                    <GripVertical class="inline h-3 w-3 align-text-bottom" />
+                    para reordenar.
                 </p>
             </div>
             <div class="flex flex-wrap items-center gap-2">
@@ -153,18 +177,46 @@ function onMobileBackToLessons() {
                     v-else
                     class="min-h-0 flex-1 space-y-1 overflow-y-auto rounded-xl border border-zinc-200 bg-zinc-50/50 p-2 dark:border-zinc-700 dark:bg-zinc-800/30"
                 >
-                    <li v-for="mod in modules" :key="mod.id">
+                    <li
+                        v-for="mod in modules"
+                        :key="mod.id"
+                        @dragover="moduleDrag.onDragOver($event, mod.id)"
+                        @dragleave="moduleDrag.onDragLeave(mod.id)"
+                        @drop="moduleDrag.onDrop($event, modules, mod.id)"
+                    >
                         <div
-                            class="group flex w-full items-center gap-2 rounded-lg transition"
-                            :class="
+                            class="group flex w-full items-center gap-1 rounded-lg transition"
+                            :class="[
                                 selectedModuleId == mod.id
                                     ? 'bg-sky-600 text-white shadow-sm dark:bg-sky-500'
-                                    : 'hover:bg-white dark:hover:bg-zinc-700/60'
-                            "
+                                    : 'hover:bg-white dark:hover:bg-zinc-700/60',
+                                moduleDrag.isDragOver(mod.id)
+                                    ? 'ring-2 ring-sky-400 ring-offset-1 dark:ring-sky-300'
+                                    : '',
+                                moduleDrag.isDragging(mod.id) ? 'opacity-40' : '',
+                            ]"
                         >
                             <button
+                                v-if="canReorderModules"
                                 type="button"
-                                class="flex min-w-0 flex-1 items-center gap-2.5 px-2.5 py-2.5 text-left"
+                                class="ml-1 shrink-0 cursor-grab touch-none rounded p-1 active:cursor-grabbing"
+                                :class="
+                                    selectedModuleId == mod.id
+                                        ? 'text-sky-100/80 hover:bg-sky-500/50'
+                                        : 'text-zinc-400 hover:bg-zinc-200/80 dark:hover:bg-zinc-600'
+                                "
+                                title="Arrastar para reordenar"
+                                draggable="true"
+                                :disabled="modulesReordering"
+                                @dragstart="moduleDrag.onDragStart($event, mod.id)"
+                                @dragend="moduleDrag.onDragEnd"
+                                @click.stop
+                            >
+                                <GripVertical class="h-4 w-4" />
+                            </button>
+                            <button
+                                type="button"
+                                class="flex min-w-0 flex-1 items-center gap-2.5 px-2 py-2.5 text-left"
                                 @click="emit('select-module', mod.id)"
                             >
                                 <div
@@ -299,18 +351,43 @@ function onMobileBackToLessons() {
 
                 <ul class="min-h-0 flex-1 space-y-0.5 overflow-y-auto p-2">
                     <li
-                        v-for="lesson in selectedModule?.lessons ?? []"
+                        v-for="lesson in sortedLessons"
                         :key="lesson.id"
+                        @dragover="lessonDrag.onDragOver($event, lesson.id)"
+                        @dragleave="lessonDrag.onDragLeave(lesson.id)"
+                        @drop="lessonDrag.onDrop($event, sortedLessons, lesson.id)"
                     >
                         <div
-                            class="group flex cursor-pointer items-center gap-2 rounded-lg px-2 py-2 text-sm transition"
-                            :class="
+                            class="group flex cursor-pointer items-center gap-1 rounded-lg px-1 py-2 text-sm transition"
+                            :class="[
                                 isLessonSelected(lesson)
                                     ? 'bg-sky-600 text-white shadow-sm dark:bg-sky-500'
-                                    : 'hover:bg-zinc-100 dark:hover:bg-zinc-800/80'
-                            "
+                                    : 'hover:bg-zinc-100 dark:hover:bg-zinc-800/80',
+                                lessonDrag.isDragOver(lesson.id)
+                                    ? 'ring-2 ring-sky-400 ring-offset-1 dark:ring-sky-300'
+                                    : '',
+                                lessonDrag.isDragging(lesson.id) ? 'opacity-40' : '',
+                            ]"
                             @click="emit('open-lesson-form', lesson)"
                         >
+                            <button
+                                v-if="canReorderLessons"
+                                type="button"
+                                class="shrink-0 cursor-grab touch-none rounded p-1 active:cursor-grabbing"
+                                :class="
+                                    isLessonSelected(lesson)
+                                        ? 'text-sky-100/80 hover:bg-sky-500/50'
+                                        : 'text-zinc-400 hover:bg-zinc-200 dark:hover:bg-zinc-700'
+                                "
+                                title="Arrastar para reordenar"
+                                draggable="true"
+                                :disabled="lessonsReordering"
+                                @dragstart="lessonDrag.onDragStart($event, lesson.id)"
+                                @dragend="lessonDrag.onDragEnd"
+                                @click.stop
+                            >
+                                <GripVertical class="h-3.5 w-3.5" />
+                            </button>
                             <span class="flex min-w-0 flex-1 items-center gap-2 truncate">
                                 <FileVideo
                                     v-if="lesson.type === 'video'"

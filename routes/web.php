@@ -371,10 +371,12 @@ Route::middleware(['auth', 'admin.tenant', 'role:admin|infoprodutor|team', 'audi
         Route::put('/produtos/{produto}/member-builder/sections/{section}', [\App\Http\Controllers\MemberBuilderController::class, 'updateSection'])->name('member-builder.sections.update');
         Route::delete('/produtos/{produto}/member-builder/sections/{section}', [\App\Http\Controllers\MemberBuilderController::class, 'destroySection'])->name('member-builder.sections.destroy');
         Route::post('/produtos/{produto}/member-builder/modules', [\App\Http\Controllers\MemberBuilderController::class, 'storeModule'])->name('member-builder.modules.store');
+        Route::post('/produtos/{produto}/member-builder/modules/reorder', [\App\Http\Controllers\MemberBuilderController::class, 'reorderModules'])->name('member-builder.modules.reorder');
         Route::put('/produtos/{produto}/member-builder/modules/{module}', [\App\Http\Controllers\MemberBuilderController::class, 'updateModule'])->name('member-builder.modules.update');
         Route::post('/produtos/{produto}/member-builder/modules/{module}/duplicate', [\App\Http\Controllers\MemberBuilderController::class, 'duplicateModule'])->name('member-builder.modules.duplicate');
         Route::delete('/produtos/{produto}/member-builder/modules/{module}', [\App\Http\Controllers\MemberBuilderController::class, 'destroyModule'])->name('member-builder.modules.destroy');
         Route::post('/produtos/{produto}/member-builder/modules/{module}/lessons', [\App\Http\Controllers\MemberBuilderController::class, 'storeLesson'])->name('member-builder.lessons.store');
+        Route::post('/produtos/{produto}/member-builder/modules/{module}/lessons/reorder', [\App\Http\Controllers\MemberBuilderController::class, 'reorderLessons'])->name('member-builder.lessons.reorder');
         Route::put('/produtos/{produto}/member-builder/lessons/{lesson}', [\App\Http\Controllers\MemberBuilderController::class, 'updateLesson'])->name('member-builder.lessons.update');
         Route::post('/produtos/{produto}/member-builder/lessons/{lesson}/duplicate', [\App\Http\Controllers\MemberBuilderController::class, 'duplicateLesson'])->name('member-builder.lessons.duplicate');
         Route::post('/produtos/{produto}/member-builder/lessons/{lesson}/apply-template', [\App\Http\Controllers\MemberBuilderController::class, 'applyLessonTemplate'])->name('member-builder.lessons.apply-template');

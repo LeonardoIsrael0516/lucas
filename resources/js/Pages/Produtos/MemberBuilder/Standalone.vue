@@ -629,8 +629,69 @@ function moduleKind(mod) {
 const modulosSelectedModule = computed(() => findModuleById(modulosSelectedModuleId.value));
 
 const courseModulesForBuilder = computed(() =>
-    builderModules.value.filter((m) => !m.related_product_id && !m.external_url)
+    builderModules.value
+        .filter((m) => !m.related_product_id && !m.external_url)
+        .sort((a, b) => (a.position ?? 0) - (b.position ?? 0))
 );
+
+const modulesReordering = ref(false);
+const lessonsReordering = ref(false);
+
+function applyCourseModuleOrder(orderedIds) {
+    const posMap = {};
+    orderedIds.forEach((id, index) => {
+        posMap[id] = index + 1;
+    });
+    builderModules.value = builderModules.value.map((m) =>
+        posMap[m.id] != null ? { ...m, position: posMap[m.id] } : m
+    );
+    syncProdutoModules();
+}
+
+function applyLessonOrder(moduleId, orderedIds) {
+    const mod = findModuleById(moduleId);
+    if (!mod) return;
+    const posMap = {};
+    orderedIds.forEach((id, index) => {
+        posMap[id] = index + 1;
+    });
+    mod.lessons = [...(mod.lessons ?? [])]
+        .map((l) => (posMap[l.id] != null ? { ...l, position: posMap[l.id] } : l))
+        .sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
+    syncProdutoModules();
+}
+
+async function onReorderModules(order) {
+    const previous = courseModulesForBuilder.value.map((m) => m.id);
+    applyCourseModuleOrder(order);
+    modulesReordering.value = true;
+    try {
+        await axios.post(`${base.value}/modules/reorder`, { order }, { headers: headers() });
+    } catch (e) {
+        applyCourseModuleOrder(previous);
+        alert(e.response?.data?.message ?? 'Não foi possível reordenar os módulos.');
+    } finally {
+        modulesReordering.value = false;
+    }
+}
+
+async function onReorderLessons({ moduleId, order }) {
+    const mod = findModuleById(moduleId);
+    if (!mod) return;
+    const previous = [...(mod.lessons ?? [])]
+        .sort((a, b) => (a.position ?? 0) - (b.position ?? 0))
+        .map((l) => l.id);
+    applyLessonOrder(moduleId, order);
+    lessonsReordering.value = true;
+    try {
+        await axios.post(`${base.value}/modules/${moduleId}/lessons/reorder`, { order }, { headers: headers() });
+    } catch (e) {
+        applyLessonOrder(moduleId, previous);
+        alert(e.response?.data?.message ?? 'Não foi possível reordenar as aulas.');
+    } finally {
+        lessonsReordering.value = false;
+    }
+}
 
 function selectModuleForAulas(moduleId) {
     modulosSelectedModuleId.value = moduleId;
@@ -2268,6 +2329,10 @@ const inputClass = 'block w-full rounded-lg border border-zinc-300 bg-white px-3
                             @remove-attachment-at="removeLessonAttachmentAt"
                             @go-comentarios="activeTab = 'comentarios'"
                             @open-apply-template="openApplyTemplateModal"
+                            :modules-reordering="modulesReordering"
+                            :lessons-reordering="lessonsReordering"
+                            @reorder-modules="onReorderModules"
+                            @reorder-lessons="onReorderLessons"
                         />
                         <LessonApplyTemplateModal
                             :open="applyTemplateModalOpen"
