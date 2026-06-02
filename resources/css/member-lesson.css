@@ -1,5 +1,6 @@
 /* Tokens — layout de aula (referência AULAS-V1) */
-.member-lesson-shell {
+.member-lesson-shell,
+.member-lesson-drawer {
     --lesson-bg: #eef2f8;
     --lesson-bg2: #e3e9f4;
     --lesson-surface: #ffffff;
@@ -12,4 +13,10 @@
     --lesson-hub-w: 252px;
     --lesson-rs-w: 308px;
     --lesson-topbar-h: 56px;
+}
+
+/** Drawer mobile (Teleport no body) — fundo sólido + mesmos tokens */
+.member-lesson-drawer {
+    background-color: #ffffff;
+    color: var(--lesson-text);
 }

@@ -23,13 +23,20 @@ import {
     GraduationCap,
     RotateCcw,
     Bell,
+    Images,
 } from 'lucide-vue-next';
 import { useSidebar } from '@/composables/useSidebar';
 import ConquistasWidget from '@/components/layout/ConquistasWidget.vue';
 import PwaInstallButton from '@/components/layout/PwaInstallButton.vue';
 
 const page = usePage();
-const { isExpanded, isMobileOpen, toggleSidebar, isMobile } = useSidebar();
+const { isExpanded, isMobileOpen, toggleSidebar, toggleMobileSidebar, isMobile } = useSidebar();
+
+function onNavItemClick() {
+    if (isMobile.value && isMobileOpen.value) {
+        toggleMobileSidebar();
+    }
+}
 
 const showText = () => isExpanded.value || isMobileOpen.value;
 
@@ -79,6 +86,7 @@ const navItems = computed(() => {
     if (canView('dashboard.view')) items.push({ name: 'Dashboard', href: '/dashboard', icon: LayoutDashboard });
     if (canView('vendas.view')) items.push({ name: 'Vendas', href: '/vendas', icon: CircleDollarSign });
     if (canView('produtos.view')) items.push({ name: 'Produtos', href: '/produtos', icon: Package });
+    if (canView('produtos.view')) items.push({ name: 'Biblioteca', href: '/biblioteca', icon: Images });
     if (canView('produtos.view')) items.push({ name: 'Alunos', href: '/produtos/alunos', icon: Users });
     if (canView('produtos.view')) items.push({ name: 'Notificações push', href: '/notificacoes-push', icon: Bell });
     if (canView('relatorios.view')) items.push({ name: 'Relatórios', href: '/relatorios', icon: BarChart3 });
@@ -113,9 +121,15 @@ const navItems = computed(() => {
 function isActive(href) {
     const url = page.url;
     if (href === '/dashboard') return url === '/dashboard' || url === '/';
+    if (href === '/biblioteca') {
+        return url === '/biblioteca' || url.startsWith('/biblioteca?');
+    }
     if (href === '/produtos') {
         // Don't highlight "Produtos" when user is in the dedicated "Alunos" page.
         if (url === '/produtos/alunos' || url.startsWith('/produtos/alunos?') || url.startsWith('/produtos/alunos/')) {
+            return false;
+        }
+        if (url === '/biblioteca' || url.startsWith('/biblioteca?')) {
             return false;
         }
         return url === '/produtos' || url.startsWith('/produtos?') || url.startsWith('/produtos/');
@@ -196,6 +210,7 @@ const panelNavPrefetch = ['hover', 'click'];
                         <Link
                             :href="item.href"
                             :prefetch="panelNavPrefetch"
+                            @click="onNavItemClick"
                             :class="[
                                 'menu-item group',
                                 showText() ? 'justify-start' : 'lg:justify-center',

@@ -13,6 +13,7 @@ use App\Models\CademiIntegration;
 use App\Models\GatewayCredential;
 use App\Models\MemberLesson;
 use App\Models\MemberModule;
+use App\Models\MemberPdfLibraryItem;
 use App\Models\MemberSection;
 use App\Models\Product;
 use App\Models\ProductOffer;
@@ -20,6 +21,7 @@ use App\Models\ProductOrderBump;
 use App\Models\SubscriptionPlan;
 use App\Models\User;
 use App\Plugins\PluginRegistry;
+use App\Services\MemberPdfLibraryService;
 use App\Services\StorageService;
 use App\Services\TeamAccessService;
 use Illuminate\Http\Request;
@@ -703,6 +705,8 @@ class ProdutosController extends Controller
             $this->persistProductCoverImage($produto, $request->file('image'), $oldImage, $oldMemberAreaCover);
         } elseif ($request->hasFile('member_area_cover')) {
             $this->persistProductCoverImage($produto, $request->file('member_area_cover'), $oldImage, $oldMemberAreaCover);
+        } elseif ($request->filled('library_image_item_id')) {
+            $this->assignProductImageFromLibrary($produto, (int) $request->input('library_image_item_id'));
         }
 
         event(new ProductUpdated($produto));
@@ -1329,6 +1333,33 @@ class ProdutosController extends Controller
         return $byMethod;
     }
 
+    private function assignProductImageFromLibrary(Product $product, int $libraryItemId): void
+    {
+        $item = MemberPdfLibraryItem::query()
+            ->forTenant((int) $product->tenant_id)
+            ->where('id', $libraryItemId)
+            ->first();
+
+        if (! $item) {
+            throw ValidationException::withMessages([
+                'library_image_item_id' => ['Imagem da biblioteca não encontrada.'],
+            ]);
+        }
+
+        if ($item->media_type !== MemberPdfLibraryItem::TYPE_IMAGE) {
+            throw ValidationException::withMessages([
+                'library_image_item_id' => ['Selecione um arquivo de imagem na biblioteca.'],
+            ]);
+        }
+
+        $updates = ['image' => $item->storage_path];
+        if ($product->type === Product::TYPE_AREA_MEMBROS) {
+            $updates['member_area_cover'] = $item->storage_path;
+        }
+
+        $product->update($updates);
+    }
+
     /**
      * Capa do produto (checkout) e da área do aluno compartilham o mesmo arquivo para cursos.
      */
@@ -1340,6 +1371,17 @@ class ProdutosController extends Controller
     ): void {
         $storage = app(StorageService::class);
         $path = $storage->putFile('products', $file);
+
+        $library = new MemberPdfLibraryService(new StorageService($product->tenant_id));
+        $library->registerFromStoredFile(
+            $path,
+            $file->getClientOriginalName() ?: 'capa',
+            $file->getMimeType() ?: 'image/jpeg',
+            (int) $file->getSize(),
+            (int) $product->tenant_id,
+            (string) $product->id,
+            auth()->id()
+        );
 
         foreach (array_unique(array_filter([$oldImage, $oldMemberAreaCover])) as $previous) {
             if ($previous === $path) {

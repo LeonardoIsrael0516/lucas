@@ -109,6 +109,9 @@ const pluginPagesGlob = import.meta.glob('./PluginPages/**/*.vue');
 // Criar primeiro admin: em bundle principal para não depender de chunk (evita 404 em deploy sem build novo)
 const createFirstAdminPage = import.meta.glob('./Pages/Auth/CreateFirstAdmin.vue', { eager: true })['./Pages/Auth/CreateFirstAdmin.vue'];
 
+// Biblioteca: página nova — eager evita "Page not found" se o Vite dev não reindexou o glob ainda
+const bibliotecaIndexPage = import.meta.glob('./Pages/Biblioteca/Index.vue', { eager: true })['./Pages/Biblioteca/Index.vue'];
+
 function resolvePluginPage(name) {
     if (!name.startsWith('Plugin/')) return null;
     const path = `./PluginPages/${name.slice(7).replace(/\//g, '/')}.vue`;
@@ -125,6 +128,9 @@ createInertiaApp({
         if (pluginPage) return pluginPage;
         if (name === 'Auth/CreateFirstAdmin' && createFirstAdminPage) {
             return Promise.resolve(createFirstAdminPage);
+        }
+        if (name === 'Biblioteca/Index' && bibliotecaIndexPage) {
+            return Promise.resolve(bibliotecaIndexPage);
         }
         return resolvePageComponent(
             `./Pages/${name}.vue`,

@@ -16,6 +16,8 @@ use Symfony\Component\HttpFoundation\Response as HttpResponse;
 
 class ApiApplicationsController extends Controller
 {
+    use Concerns\RegistersMediaLibraryUploads;
+
     private const WEBHOOK_SECRET_MASK = '__getfy_masked_webhook_secret__';
 
     /**
@@ -300,10 +302,20 @@ class ApiApplicationsController extends Controller
         $file = $request->file('image');
         $name = Str::uuid() . '.' . $file->getClientOriginalExtension();
         $path = $storage->putFileAs('api-applications/' . $apiApplication->id, $file, $name);
+        $libraryItem = $this->registerMediaLibraryUpload(
+            $path,
+            $file,
+            (int) $apiApplication->tenant_id,
+            null,
+            (int) $request->user()->id
+        );
         $apiApplication->update(['logo' => $path]);
         $url = $storage->url($path);
 
-        return response()->json(['url' => $url], HttpResponse::HTTP_CREATED);
+        return response()->json([
+            'url' => $url,
+            'library_item_id' => $libraryItem->id,
+        ], HttpResponse::HTTP_CREATED);
     }
 
     public function removeLogo(ApiApplication $apiApplication): JsonResponse

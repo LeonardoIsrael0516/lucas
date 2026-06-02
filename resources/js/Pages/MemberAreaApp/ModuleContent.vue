@@ -36,6 +36,12 @@ const props = defineProps({
 });
 
 const courseSidebarOpen = ref(false);
+const isMobileViewport = ref(false);
+
+function updateMobileViewport() {
+    isMobileViewport.value = typeof window !== 'undefined' && window.innerWidth < 768;
+}
+
 const moduleId = computed(() => props.module?.id);
 
 const allModules = computed(() => {
@@ -244,6 +250,9 @@ const hasBottomPanel = computed(() => {
 const showVisualizingBar = computed(() => {
     const cl = props.current_lesson;
     if (!cl || !isPdfLessonType(cl.type)) return false;
+    if (isMobileViewport.value && (showPdfReaderViewer.value || showPdfPresentationViewer.value)) {
+        return false;
+    }
     return (
         showPdfIntro.value ||
         showPdfReaderViewer.value ||
@@ -393,6 +402,8 @@ watch(
 );
 
 onMounted(() => {
+    updateMobileViewport();
+    window.addEventListener('resize', updateMobileViewport);
     syncEngagementFromLesson(props.current_lesson);
     if (coerceLessonCompleted(props.current_lesson?.is_completed)) completed.value = true;
     else if (props.current_lesson?.type === 'video') scheduleAutoComplete();
@@ -400,6 +411,7 @@ onMounted(() => {
 });
 
 onUnmounted(() => {
+    window.removeEventListener('resize', updateMobileViewport);
     if (autoCompleteTimer) clearTimeout(autoCompleteTimer);
 });
 
@@ -478,14 +490,23 @@ function onPdfReaderLastPage() {
         <div class="flex min-h-0 flex-1 overflow-hidden">
             <div class="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
                 <template v-if="current_lesson">
-                    <div class="flex min-h-0 flex-1 flex-col overflow-hidden">
+                    <div
+                        class="flex min-h-0 flex-1 flex-col overflow-hidden"
+                        :class="showPdfReaderViewer && isMobileViewport ? 'max-md:min-h-0' : ''"
+                    >
                         <!-- Intro PDF / Viewer -->
                         <div
-                            class="flex min-h-0 flex-1 flex-col overflow-hidden"
+                            class="flex min-h-0 flex-col overflow-hidden"
                             :class="
                                 showPdfViewerCard
-                                    ? 'mx-3 mt-3 rounded-xl border border-[var(--lesson-border)] bg-white shadow-sm'
-                                    : ''
+                                    ? [
+                                          'flex-1 min-h-0',
+                                          'mx-3 mt-3 rounded-xl border border-[var(--lesson-border)] bg-white shadow-sm max-md:mx-2 max-md:mt-2',
+                                          showPdfReaderViewer && isMobileViewport
+                                              ? 'max-md:min-h-[min(58vh,560px)]'
+                                              : '',
+                                      ]
+                                    : 'flex-1 min-h-0'
                             "
                         >
                             <div
@@ -622,7 +643,8 @@ function onPdfReaderLastPage() {
 
                         <LessonTabs
                             v-if="showLessonTabsPanel"
-                            tall
+                            :tall="!isMobileViewport"
+                            class="shrink-0 max-md:max-h-[30vh]"
                             show-empty-overview
                             :overview-html="formattedOverviewHtml"
                             :downloadable-files="downloadableLessonFiles"
@@ -672,10 +694,12 @@ function onPdfReaderLastPage() {
         <!-- Sidebar curso — mobile drawer -->
         <Teleport to="body">
             <div v-if="courseSidebarOpen" class="fixed inset-0 z-[60] lg:hidden">
-                <div class="absolute inset-0 bg-black/40" @click="courseSidebarOpen = false" />
-                <div class="absolute right-0 top-0 bottom-0 flex w-[min(100%,320px)] shadow-2xl">
+                <div class="absolute inset-0 bg-black/50" @click="courseSidebarOpen = false" />
+                <div
+                    class="member-lesson-drawer absolute right-0 top-0 bottom-0 flex w-[min(100%,320px)] overflow-hidden bg-white shadow-2xl"
+                >
                     <CourseLessonSidebar
-                        class="h-full w-full"
+                        class="h-full min-h-0 w-full bg-white"
                         :product="product"
                         :module="module"
                         :slug="slug"

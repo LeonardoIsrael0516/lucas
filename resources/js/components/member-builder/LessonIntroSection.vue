@@ -1,7 +1,7 @@
 <script setup>
 import { ref } from 'vue';
 import Button from '@/components/ui/Button.vue';
-import { Plus, Trash2, Paperclip, ChevronDown, ChevronRight, MessageSquare } from 'lucide-vue-next';
+import { Plus, Trash2, Paperclip, ChevronDown, ChevronRight, MessageSquare, FolderOpen } from 'lucide-vue-next';
 
 const props = defineProps({
     lessonForm: { type: Object, required: true },
@@ -20,6 +20,7 @@ const emit = defineEmits([
     'remove-resource-link-at',
     'upload-attachment',
     'remove-attachment-at',
+    'open-attachment-library',
     'go-comentarios',
 ]);
 
@@ -123,14 +124,32 @@ function overviewHint(type) {
             <div>
                 <label class="mb-1 block text-xs font-medium text-zinc-600 dark:text-zinc-400">Anexos para download</label>
                 <p class="mb-2 text-xs text-zinc-500 dark:text-zinc-400">
-                    Arquivos extras (PDF, imagens, ZIP, Office, TXT). Máx.
-                    {{ uploadLimits.attachment_max_mb ?? 50 }} MB cada. Até 20 anexos.
+                    Arquivos extras (PDF, imagens, ZIP, Office, TXT). PDFs também podem vir da
+                    <strong>biblioteca</strong>. Máx. {{ uploadLimits.attachment_max_mb ?? 50 }} MB cada. Até 20 anexos.
                 </p>
                 <input ref="fileInputRef" type="file" class="hidden" @change="onFileChange" />
-                <Button type="button" size="sm" variant="outline" :disabled="attachmentUploading" @click="fileInputRef?.click()">
-                    <Paperclip class="mr-1.5 h-3.5 w-3.5" />
-                    {{ attachmentUploading ? 'Enviando…' : 'Enviar anexo' }}
-                </Button>
+                <div class="flex flex-wrap items-center gap-2">
+                    <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        :disabled="attachmentUploading || (lessonForm.attachment_files?.length ?? 0) >= 20"
+                        @click="fileInputRef?.click()"
+                    >
+                        <Paperclip class="mr-1.5 h-3.5 w-3.5" />
+                        {{ attachmentUploading ? 'Enviando…' : 'Enviar anexo' }}
+                    </Button>
+                    <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        :disabled="(lessonForm.attachment_files?.length ?? 0) >= 20"
+                        @click="emit('open-attachment-library')"
+                    >
+                        <FolderOpen class="mr-1.5 h-3.5 w-3.5" />
+                        Da biblioteca
+                    </Button>
+                </div>
                 <ul v-if="(lessonForm.attachment_files?.length ?? 0) > 0" class="mt-2 space-y-1">
                     <li
                         v-for="(f, i) in lessonForm.attachment_files"

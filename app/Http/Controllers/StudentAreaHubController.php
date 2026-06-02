@@ -26,6 +26,8 @@ use Inertia\Response;
 
 class StudentAreaHubController extends Controller
 {
+    use Concerns\RegistersMediaLibraryUploads;
+
     use BuildsCommunityPagePayload;
     use SharesStudentSupportProps;
 
@@ -130,7 +132,15 @@ class StudentAreaHubController extends Controller
         $imagePath = null;
         if ($request->hasFile('image')) {
             $storage = new StorageService($tenantId);
-            $imagePath = $storage->putFile('member-area-posts/global', $request->file('image'));
+            $file = $request->file('image');
+            $imagePath = $storage->putFile('member-area-posts/global', $file);
+            $this->registerMediaLibraryUpload(
+                $imagePath,
+                $file,
+                $tenantId,
+                null,
+                (int) $request->user()->id
+            );
         }
         MemberCommunityPost::create([
             'member_community_page_id' => $page->id,

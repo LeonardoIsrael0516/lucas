@@ -337,6 +337,18 @@ Route::middleware(['auth', 'admin.tenant', 'role:admin|infoprodutor|team', 'audi
         Route::delete('/produtos/alunos/{aluno}', [\App\Http\Controllers\AlunosController::class, 'destroy'])->name('alunos.destroy')->where('aluno', '[0-9]+');
         Route::delete('/produtos/alunos/{aluno}/produtos/{produto}', [\App\Http\Controllers\AlunosController::class, 'removeProduct'])->name('alunos.remove-product')->where('aluno', '[0-9]+');
 
+        Route::get('/notificacoes-push', [\App\Http\Controllers\StudentPushNotificationsController::class, 'index'])->name('push-notifications.index');
+        Route::post('/notificacoes-push/enviar', [\App\Http\Controllers\StudentPushNotificationsController::class, 'send'])->name('push-notifications.send')->middleware('throttle:10,1');
+
+        Route::get('/biblioteca', [\App\Http\Controllers\TenantMediaLibraryController::class, 'index'])->name('biblioteca.index');
+        Route::get('/biblioteca/items', [\App\Http\Controllers\TenantMediaLibraryController::class, 'listItems'])->name('biblioteca.items.index');
+        Route::post('/biblioteca/items', [\App\Http\Controllers\TenantMediaLibraryController::class, 'store'])->name('biblioteca.items.store');
+        Route::post('/biblioteca/folders', [\App\Http\Controllers\TenantMediaLibraryController::class, 'storeFolder'])->name('biblioteca.folders.store');
+        Route::patch('/biblioteca/folders/{folder}', [\App\Http\Controllers\TenantMediaLibraryController::class, 'updateFolder'])->name('biblioteca.folders.update');
+        Route::delete('/biblioteca/folders/{folder}', [\App\Http\Controllers\TenantMediaLibraryController::class, 'destroyFolder'])->name('biblioteca.folders.destroy');
+        Route::patch('/biblioteca/items/{item}/move', [\App\Http\Controllers\TenantMediaLibraryController::class, 'moveItem'])->name('biblioteca.items.move');
+        Route::delete('/biblioteca/items/{item}', [\App\Http\Controllers\TenantMediaLibraryController::class, 'destroy'])->name('biblioteca.items.destroy');
+
         // Member Builder (área de membros do produto)
         Route::get('/produtos/{produto}/member-builder', [\App\Http\Controllers\MemberBuilderController::class, 'index'])->name('member-builder.index');
         Route::put('/produtos/{produto}/member-builder/config', [\App\Http\Controllers\MemberBuilderController::class, 'updateConfig'])->name('member-builder.config.update');
@@ -548,7 +560,12 @@ Route::prefix('m/{slug}')->where(['slug' => '[a-zA-Z0-9\-]{3,64}'])->middleware(
             abort(404);
         }
 
-        return response()->file($path, ['Content-Type' => 'application/javascript']);
+        return response()->file($path, [
+            'Content-Type' => 'application/javascript; charset=UTF-8',
+            'Cache-Control' => 'no-store, no-cache, must-revalidate, max-age=0',
+            'Pragma' => 'no-cache',
+            'Expires' => '0',
+        ]);
     })->name('member-area-app.sw');
     Route::get('login', fn () => redirect('/login', 301))->middleware('guest');
     Route::post('login', fn () => redirect('/login', 302))->middleware(['guest', 'throttle:5,1']);
@@ -608,7 +625,12 @@ Route::middleware(['web', 'member.area.resolve.by.host'])->group(function () {
             abort(404);
         }
 
-        return response()->file($path, ['Content-Type' => 'application/javascript']);
+        return response()->file($path, [
+            'Content-Type' => 'application/javascript; charset=UTF-8',
+            'Cache-Control' => 'no-store, no-cache, must-revalidate, max-age=0',
+            'Pragma' => 'no-cache',
+            'Expires' => '0',
+        ]);
     })->name('member-area-app.sw.host');
     Route::get('access', [\App\Http\Controllers\MemberAreaLoginController::class, 'magicAccessHost'])->name('member-area.magic-access.host')->middleware('member.area.signed');
 

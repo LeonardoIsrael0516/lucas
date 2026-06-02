@@ -96,8 +96,26 @@ const error = ref('');
 const globalPage = ref(1);
 const totalPages = ref(0);
 const pdfDocs = shallowRef([]);
-const zoomMul = ref(1);
+/** Zoom padrão: desktop 250%, mobile 100% (página inteira na área visível) */
+const DEFAULT_ZOOM_DESKTOP = 2.5;
+const DEFAULT_ZOOM_MOBILE = 1;
+
+function defaultZoomMulForViewport() {
+    return isDesktopViewport.value ? DEFAULT_ZOOM_DESKTOP : DEFAULT_ZOOM_MOBILE;
+}
+
+const zoomMul = ref(
+    typeof window !== 'undefined' && window.innerWidth < 768 ? DEFAULT_ZOOM_MOBILE : DEFAULT_ZOOM_DESKTOP
+);
 const isFullscreen = ref(false);
+/** Modo aula: documento contínuo (todas as páginas empilhadas, scroll nativo) */
+const useContinuousScroll = computed(() => isLessonVariant.value);
+const continuousWrapRef = ref(null);
+
+/** Lista estável 1..N para v-for (evita ambiguidade do ref numérico) */
+const pageNumberList = computed(() =>
+    totalPages.value > 0 ? Array.from({ length: totalPages.value }, (_, i) => i + 1) : []
+);
 const highlightColor = ref(null);
 const toastMessage = ref('');
 let toastTimer = null;
@@ -141,6 +159,8 @@ const loadRetryAttempt = ref(0);
 
 let renderRetryTimer = null;
 const mainCanvasReady = ref(false);
+/** PDF contínuo totalmente renderizado (evita overlay em cima de páginas vazias) */
+const pdfDocumentReady = ref(false);
 
 /** Invalida carregamentos / miniaturas ao trocar de aula */
 let loadGeneration = 0;
@@ -150,6 +170,11 @@ const thumbsRenderedPages = new Set();
 
 const WHEEL_LISTENER_OPTS = { passive: false };
 let wheelHostEl = null;
+let continuousScrollHostEl = null;
+let pageScrollSyncSuppress = false;
+let pageScrollRaf = null;
+let documentRenderToken = 0;
+const PDF_PAGE_GAP_PX = 12;
 let pageFlipCooldown = 0;
 const PAGE_FLIP_COOLDOWN_MS = 350;
 const isDesktopViewport = ref(true);
@@ -187,8 +212,19 @@ function showToast(msg) {
     }, 3200);
 }
 
+function syncDefaultZoomForViewport() {
+    const target = defaultZoomMulForViewport();
+    if (Math.abs(zoomMul.value - target) > 0.01) {
+        zoomMul.value = target;
+    }
+}
+
 function updateViewportFlags() {
+    const prev = isDesktopViewport.value;
     isDesktopViewport.value = typeof window !== 'undefined' ? window.innerWidth >= 768 : true;
+    if (prev !== isDesktopViewport.value) {
+        syncDefaultZoomForViewport();
+    }
 }
 
 function revealFullscreenNav() {
@@ -227,6 +263,44 @@ const currentPageHighlights = computed(() => {
     const list = highlightsByFile.value[fileIndex] || [];
     return list.filter((h) => h.page === pageNum);
 });
+
+function highlightsForPage(pg) {
+    const { fileIndex, pageNum } = globalToLocal(pg);
+    const list = highlightsByFile.value[fileIndex] || [];
+    return list.filter((h) => h.page === pageNum);
+}
+
+function getContinuousPageBlock(pg) {
+    const wrap = continuousWrapRef.value;
+    if (!wrap) return null;
+    return wrap.querySelector(`.pdf-lesson-page-block[data-pdf-page="${pg}"]`);
+}
+
+function getContinuousPageCanvas(pg) {
+    const block = getContinuousPageBlock(pg);
+    return block?.querySelector('canvas.pdf-lesson-page-canvas') ?? null;
+}
+
+/**
+ * zoomMul 1 = página inteira cabe na área visível; 2.5 = 250% dessa base.
+ * Mesma lógica no modo contínuo e na página única da aula.
+ */
+function computePageFitScale(baseViewport, hostOrBox) {
+    const box =
+        hostOrBox && typeof hostOrBox.w === 'number'
+            ? hostOrBox
+            : hostContentBox(hostOrBox);
+    const { w: cw, h: ch } = box;
+    const fitWidth = Math.min(cw / baseViewport.width, 8);
+    const fitWhole = Math.min(cw / baseViewport.width, ch / baseViewport.height, 8);
+    if (isLessonVariant.value || useContinuousScroll.value) {
+        return fitWhole * zoomMul.value;
+    }
+    if (isFullscreen.value) {
+        return fitWhole;
+    }
+    return fitWidth * zoomMul.value;
+}
 
 async function loadAnnotations() {
     try {
@@ -318,7 +392,7 @@ function waitForHostLayout(host, timeoutMs = HOST_LAYOUT_WAIT_MS) {
     });
 }
 
-/** Dimensões úteis para fit; fallback se o flex ainda não deu altura ao host */
+/** Dimensões úteis para fit; na aula usa só o viewport visível do host de scroll */
 function hostContentBox(host) {
     if (!host) {
         return { w: 640, h: 480 };
@@ -326,9 +400,26 @@ function hostContentBox(host) {
     const s = getComputedStyle(host);
     const padX = parseFloat(s.paddingLeft) + parseFloat(s.paddingRight);
     const padY = parseFloat(s.paddingTop) + parseFloat(s.paddingBottom);
+
+    if (isLessonVariant.value || useContinuousScroll.value) {
+        let w = Math.max(80, host.clientWidth - padX);
+        let h = Math.max(80, host.clientHeight - padY);
+        if (h < HOST_MIN_LAYOUT_PX) {
+            let el = host.parentElement;
+            for (let i = 0; i < 3 && el; i++) {
+                h = Math.max(h, el.clientHeight - padY);
+                if (h >= HOST_MIN_LAYOUT_PX) break;
+                el = el.parentElement;
+            }
+        }
+        if (h < HOST_MIN_LAYOUT_PX) {
+            h = Math.max(h, Math.min(700, Math.floor(window.innerHeight * 0.45)));
+        }
+        return { w, h };
+    }
+
     let w = host.clientWidth - padX;
     let h = host.clientHeight - padY;
-
     if (w < HOST_MIN_LAYOUT_PX || h < HOST_MIN_LAYOUT_PX) {
         let el = host.parentElement;
         for (let i = 0; i < 4 && el; i++) {
@@ -357,6 +448,16 @@ function clearRenderRetry() {
 }
 
 function isMainCanvasPainted() {
+    if (useContinuousScroll.value) {
+        const first = getContinuousPageCanvas(1);
+        const second = getContinuousPageCanvas(2);
+        if (!first || first.width <= 16) return false;
+        if (!second || second.width <= 16) return true;
+        const w1 = first.getBoundingClientRect().width;
+        const w2 = second.getBoundingClientRect().width;
+        if (w1 < 8 || w2 < 8) return false;
+        return Math.abs(w1 - w2) / Math.max(w1, w2) < 0.06;
+    }
     const canvas = canvasRef.value;
     return !!canvas && canvas.width > 16 && canvas.height > 16;
 }
@@ -383,7 +484,110 @@ function scheduleRenderRetry(gen = loadGeneration) {
     void attempt(RENDER_RETRY_MAX);
 }
 
+/** Ordem de render: demais páginas primeiro, página 1 por último (layout estável + mesmo zoom) */
+function continuousPagePaintOrder() {
+    const order = [];
+    for (let pg = 2; pg <= totalPages.value; pg++) order.push(pg);
+    if (totalPages.value >= 1) order.push(1);
+    return order;
+}
+
+async function renderPageToCanvas(pg, canvas, layoutBox = null) {
+    const host = canvasHostRef.value;
+    if (!canvas || !host || !pdfDocs.value.length) return false;
+
+    const { doc, pageNum } = globalToLocal(pg);
+    if (!doc) return false;
+
+    const page = await doc.getPage(pageNum);
+    const outputScale = window.devicePixelRatio || 1;
+    const baseViewport = page.getViewport({ scale: 1 });
+    const fit = computePageFitScale(baseViewport, layoutBox ?? host);
+    const viewport = page.getViewport({ scale: fit * outputScale });
+
+    const ctx = canvas.getContext('2d');
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    canvas.width = Math.floor(viewport.width);
+    canvas.height = Math.floor(viewport.height);
+    canvas.style.width = `${viewport.width / outputScale}px`;
+    canvas.style.height = `${viewport.height / outputScale}px`;
+
+    const task = page.render({ canvasContext: ctx, viewport });
+    try {
+        await task.promise;
+    } catch (e) {
+        if (e?.name !== 'RenderingCancelledException') console.warn(e);
+        return false;
+    }
+    return canvas.width > 16 && canvas.height > 16;
+}
+
+let renderDocumentInFlight = null;
+
+async function renderDocumentPages() {
+    if (renderDocumentInFlight) {
+        await renderDocumentInFlight;
+    }
+
+    const run = async () => {
+        const token = ++documentRenderToken;
+        const host = canvasHostRef.value;
+        if (!host || !pdfDocs.value.length || !useContinuousScroll.value) return;
+
+        pdfDocumentReady.value = false;
+        await nextTick();
+        await waitForHostLayout(host);
+        if (token !== documentRenderToken) return;
+
+        const layoutBox = hostContentBox(host);
+        let anyPainted = false;
+
+        for (const pg of continuousPagePaintOrder()) {
+            const canvas = getContinuousPageCanvas(pg);
+            if (!canvas) continue;
+            const painted = await renderPageToCanvas(pg, canvas, layoutBox);
+            if (painted) anyPainted = true;
+        }
+
+        if (token !== documentRenderToken) return;
+
+        const canvas1 = getContinuousPageCanvas(1);
+        if (canvas1) {
+            await renderPageToCanvas(1, canvas1, layoutBox);
+            anyPainted = anyPainted || canvas1.width > 16;
+        }
+
+        if (token !== documentRenderToken) return;
+
+        mainCanvasReady.value = anyPainted;
+        pdfDocumentReady.value = anyPainted;
+        void renderNextPeek();
+
+        if (anyPainted) {
+            pageScrollSyncSuppress = true;
+            globalPage.value = 1;
+            host.scrollTop = 0;
+            const overflowX = host.scrollWidth - host.clientWidth;
+            host.scrollLeft = overflowX > 2 ? Math.floor(overflowX / 2) : 0;
+            requestAnimationFrame(() => {
+                pageScrollSyncSuppress = false;
+            });
+        }
+    };
+
+    renderDocumentInFlight = run();
+    try {
+        await renderDocumentInFlight;
+    } finally {
+        renderDocumentInFlight = null;
+    }
+}
+
 async function renderCurrentPage() {
+    if (useContinuousScroll.value) {
+        return renderDocumentPages();
+    }
+
     const canvas = canvasRef.value;
     const host = canvasHostRef.value;
     if (!canvas || !host || !pdfDocs.value.length) return;
@@ -394,17 +598,7 @@ async function renderCurrentPage() {
     const page = await doc.getPage(pageNum);
     const outputScale = window.devicePixelRatio || 1;
     const baseViewport = page.getViewport({ scale: 1 });
-    const { w: cw, h: ch } = hostContentBox(host);
-    const fitWhole = Math.min(cw / baseViewport.width, ch / baseViewport.height, 8);
-    const fitWidth = Math.min(cw / baseViewport.width, 8);
-    let fit;
-    if (isLessonVariant.value) {
-        fit = fitWhole * zoomMul.value;
-    } else if (isFullscreen.value) {
-        fit = fitWhole;
-    } else {
-        fit = fitWidth * zoomMul.value;
-    }
+    const fit = computePageFitScale(baseViewport, host);
     const viewport = page.getViewport({ scale: fit * outputScale });
 
     const ctx = canvas.getContext('2d');
@@ -454,6 +648,8 @@ async function renderNextPeek() {
 }
 
 async function destroyDocs() {
+    documentRenderToken += 1;
+    pdfDocumentReady.value = false;
     thumbsRenderedPages.clear();
     for (const d of pdfDocs.value) {
         try {
@@ -514,14 +710,8 @@ async function loadDocumentsCore(gen, list) {
 
     pdfDocs.value = [firstDoc];
     totalPages.value = firstDoc.numPages;
-    await nextTick();
-    await waitForHostLayout(canvasHostRef.value);
-    if (gen !== loadGeneration) return false;
-    await renderCurrentPage();
-    if (gen !== loadGeneration) return false;
 
     void loadAnnotations();
-    scheduleThumbRender();
 
     if (list.length > 1) {
         void loadRemainingPdfFiles(list.slice(1), gen);
@@ -536,6 +726,7 @@ async function loadDocuments() {
     clearRenderRetry();
     thumbsRenderedPages.clear();
     mainCanvasReady.value = false;
+    pdfDocumentReady.value = false;
     loading.value = true;
     error.value = '';
     loadRetryAttempt.value = 0;
@@ -565,6 +756,7 @@ async function loadDocuments() {
             totalPages.value = 0;
             globalPage.value = 1;
             mainCanvasReady.value = false;
+            pdfDocumentReady.value = false;
             await sleep(PDF_LOAD_RETRY_BASE_MS * (attempt - 1));
         }
 
@@ -594,7 +786,15 @@ async function loadDocuments() {
     }
 
     loading.value = false;
+    syncDefaultZoomForViewport();
     await nextTick();
+    await waitForHostLayout(canvasHostRef.value);
+    if (gen !== loadGeneration) return;
+    await renderCurrentPage();
+    if (gen === loadGeneration) {
+        scheduleThumbRender();
+    }
+    bindContinuousScroll();
     scheduleRenderRetry(gen);
 }
 
@@ -708,6 +908,7 @@ function renderVisibleThumbs() {
 }
 
 function resetCanvasHostScroll() {
+    if (useContinuousScroll.value) return;
     ensureCanvasVisibleAtTop();
 }
 
@@ -720,16 +921,94 @@ function ensureCanvasVisibleAtTop() {
     host.scrollLeft = overflowX > 2 ? Math.floor(overflowX / 2) : 0;
 }
 
+function scrollToGlobalPage(g, behavior = 'smooth') {
+    const block = useContinuousScroll.value ? getContinuousPageBlock(g) : null;
+    const host = canvasHostRef.value;
+    if (!block || !host) return;
+    pageScrollSyncSuppress = true;
+    const hostRect = host.getBoundingClientRect();
+    const blockRect = block.getBoundingClientRect();
+    const nextTop = host.scrollTop + (blockRect.top - hostRect.top);
+    host.scrollTo({ top: Math.max(0, nextTop), behavior });
+    requestAnimationFrame(() => {
+        pageScrollSyncSuppress = false;
+    });
+}
+
+function syncGlobalPageFromScroll() {
+    if (pageScrollSyncSuppress || !useContinuousScroll.value) return;
+    const host = canvasHostRef.value;
+    const wrap = continuousWrapRef.value;
+    if (!host || !wrap || totalPages.value <= 0) return;
+
+    const hostRect = host.getBoundingClientRect();
+    const anchor = hostRect.top + host.clientHeight * 0.28;
+    let bestPg = globalPage.value;
+    let bestDist = Infinity;
+
+    const blocks = wrap.querySelectorAll('.pdf-lesson-page-block[data-pdf-page]');
+    for (const block of blocks) {
+        const pg = Number(block.getAttribute('data-pdf-page'));
+        if (!Number.isFinite(pg) || pg < 1) continue;
+        const blockRect = block.getBoundingClientRect();
+        if (blockRect.bottom < hostRect.top || blockRect.top > hostRect.bottom) continue;
+        const dist = Math.abs(blockRect.top - anchor);
+        if (dist < bestDist) {
+            bestDist = dist;
+            bestPg = pg;
+        }
+    }
+
+    if (bestPg !== globalPage.value) {
+        pageScrollSyncSuppress = true;
+        globalPage.value = bestPg;
+        requestAnimationFrame(() => {
+            pageScrollSyncSuppress = false;
+        });
+    }
+}
+
+function onContinuousHostScroll() {
+    if (pageScrollRaf != null) return;
+    pageScrollRaf = requestAnimationFrame(() => {
+        pageScrollRaf = null;
+        syncGlobalPageFromScroll();
+    });
+}
+
+function bindContinuousScroll() {
+    unbindContinuousScroll();
+    const host = canvasHostRef.value;
+    if (!host || !useContinuousScroll.value) return;
+    host.addEventListener('scroll', onContinuousHostScroll, { passive: true });
+    continuousScrollHostEl = host;
+}
+
+function unbindContinuousScroll() {
+    if (continuousScrollHostEl) {
+        continuousScrollHostEl.removeEventListener('scroll', onContinuousHostScroll);
+        continuousScrollHostEl = null;
+    }
+    if (pageScrollRaf != null) {
+        cancelAnimationFrame(pageScrollRaf);
+        pageScrollRaf = null;
+    }
+}
+
 function prevPage() {
     if (globalPage.value <= 1) return;
     globalPage.value -= 1;
-    resetCanvasHostScroll();
+    if (!useContinuousScroll.value) {
+        resetCanvasHostScroll();
+    }
 }
 
 function nextPage() {
     if (globalPage.value >= totalPages.value) return;
     globalPage.value += 1;
-    resetCanvasHostScroll();
+    if (!useContinuousScroll.value) {
+        resetCanvasHostScroll();
+    }
 }
 
 function zoomIn() {
@@ -744,6 +1023,7 @@ function zoomOut() {
 
 /** Após zoom por botões no desktop (aula, fora de tela cheia), ancora no topo da página */
 function resetCanvasHostScrollAfterZoom() {
+    if (useContinuousScroll.value) return;
     if (!isLessonVariant.value || isLessonMobile.value || isFullscreen.value) return;
     resetCanvasHostScroll();
 }
@@ -773,6 +1053,8 @@ function hostHasHorizontalOverflow() {
 }
 
 function onWheelPageFlip(e) {
+    if (useContinuousScroll.value) return;
+
     const el = canvasHostRef.value;
     if (!el) return;
 
@@ -881,6 +1163,7 @@ function lessonTouchGesturesEnabled() {
 }
 
 function canLessonTouchPan() {
+    if (useContinuousScroll.value) return false;
     return lessonTouchGesturesEnabled() && zoomMul.value > 1.01 && !highlightColor.value;
 }
 
@@ -1073,6 +1356,12 @@ function onKeyDown(e) {
 
 function goToGlobalPage(g) {
     if (g < 1 || g > totalPages.value) return;
+    if (useContinuousScroll.value) {
+        pageScrollSyncSuppress = true;
+        globalPage.value = g;
+        nextTick(() => scrollToGlobalPage(g));
+        return;
+    }
     globalPage.value = g;
     resetCanvasHostScroll();
 }
@@ -1092,8 +1381,11 @@ function syncThumbsScroll() {
     }
 }
 
-function overlayPointerDown(e) {
+function overlayPointerDown(pg, e) {
     if (!highlightColor.value) return;
+    if (useContinuousScroll.value && pg !== globalPage.value) {
+        globalPage.value = pg;
+    }
     const overlay = e.currentTarget;
     const rect = overlay.getBoundingClientRect();
     const x = (e.clientX - rect.left) / rect.width;
@@ -1103,7 +1395,7 @@ function overlayPointerDown(e) {
     selectCurrent.value = { x, y };
 }
 
-function overlayPointerMove(e) {
+function overlayPointerMove(pg, e) {
     if (!selecting.value || !highlightColor.value) return;
     const overlay = e.currentTarget;
     const rect = overlay.getBoundingClientRect();
@@ -1112,7 +1404,7 @@ function overlayPointerMove(e) {
     selectCurrent.value = { x, y };
 }
 
-function overlayPointerUp(e) {
+function overlayPointerUp(pg, e) {
     if (!selecting.value || !highlightColor.value || !selectStart.value) {
         selecting.value = false;
         return;
@@ -1132,7 +1424,7 @@ function overlayPointerUp(e) {
     selectCurrent.value = null;
     if (w < 0.008 || h < 0.008) return;
 
-    const { fileIndex, pageNum } = currentLocal.value;
+    const { fileIndex, pageNum } = globalToLocal(pg);
     const id =
         typeof crypto !== 'undefined' && crypto.randomUUID
             ? crypto.randomUUID()
@@ -1225,6 +1517,26 @@ watch(filesVersionKey, (next, prev) => {
 });
 
 watch(globalPage, async (newP, oldP) => {
+    if (useContinuousScroll.value) {
+        if (!pageScrollSyncSuppress) {
+            await nextTick();
+            scrollToGlobalPage(newP, 'auto');
+        }
+        if (isFullscreen.value) {
+            revealFullscreenNav();
+        }
+        if (oldP !== undefined && oldP !== null && newP !== oldP) {
+            const prevFi = globalToLocal(oldP).fileIndex;
+            await saveFileIndexAnnotations(prevFi);
+        }
+        scheduleThumbRender();
+        syncThumbsScroll();
+        if (totalPages.value > 0 && newP === totalPages.value && oldP !== undefined && newP !== oldP) {
+            emit('last-page-reached');
+        }
+        return;
+    }
+
     resetCanvasHostScroll();
     if (isFullscreen.value) {
         revealFullscreenNav();
@@ -1245,14 +1557,22 @@ watch(globalPage, async (newP, oldP) => {
 
 watch(zoomMul, async () => {
     if (pinchZoomBypassWatch) return;
+    pdfDocumentReady.value = false;
+    documentRenderToken += 1;
     await renderCurrentPage();
     resetCanvasHostScrollAfterZoom();
     void nextTick(() => bindLessonTouchGestures());
 });
 
 watch(totalPages, (n) => {
-    if (n > 0) {
-        nextTick(() => scheduleThumbRender());
+    if (n > 0 && !loading.value) {
+        nextTick(() => {
+            scheduleThumbRender();
+            if (useContinuousScroll.value) {
+                bindContinuousScroll();
+                void renderDocumentPages();
+            }
+        });
     }
 });
 
@@ -1277,12 +1597,14 @@ onMounted(() => {
             resizeObserver.observe(host);
         }
         bindWheelHost();
+        bindContinuousScroll();
         bindLessonTouchGestures();
     });
 });
 
 onUnmounted(() => {
     unbindWheelHost();
+    unbindContinuousScroll();
     unbindLessonTouchGestures();
     document.removeEventListener('fullscreenchange', onFullscreenChange);
     window.removeEventListener('keydown', onKeyDown);
@@ -1356,9 +1678,12 @@ const pdfCanvasHostClasses = computed(() => {
         const classes = [
             shell,
             'pdf-lesson-mobile-scroll-host bg-[var(--lesson-pdf-bg)]',
-            isFullscreen.value ? 'p-3' : 'px-3 py-3 sm:px-6 sm:py-6',
+            isFullscreen.value ? 'p-3' : 'px-2 py-2 sm:px-6 sm:py-6',
         ];
-        if (zoomMul.value > 1.01) {
+        if (isLessonMobile.value && !isFullscreen.value) {
+            classes.push('min-h-[min(52vh,480px)]');
+        }
+        if (!useContinuousScroll.value && zoomMul.value > 1.01) {
             classes.push('pdf-lesson-touch-pan-active');
         }
         return classes;
@@ -1367,12 +1692,8 @@ const pdfCanvasHostClasses = computed(() => {
         shell,
         'pdf-lesson-desktop-scroll-host bg-[var(--lesson-pdf-bg)]',
         isFullscreen.value ? 'p-3' : 'p-4 sm:p-6',
+        'pdf-lesson-desktop-scroll-host--zoomed',
     ];
-    if (zoomMul.value > 1.01) {
-        classes.push('pdf-lesson-desktop-scroll-host--zoomed');
-    } else {
-        classes.push('pdf-lesson-desktop-scroll-host--fit');
-    }
     return classes;
 });
 
@@ -1381,6 +1702,9 @@ const lessonMobileScrollInner = computed(
 );
 
 const lessonScrollShellClass = computed(() => {
+    if (useContinuousScroll.value) {
+        return 'pdf-lesson-scroll-content pdf-lesson-continuous-doc';
+    }
     if (isLessonDesktopViewer.value) {
         return 'pdf-lesson-scroll-content';
     }
@@ -1392,6 +1716,8 @@ const lessonCanvasWrapClass = computed(() => {
     const base = [];
     if (!isLessonVariant.value) {
         base.push('relative', 'inline-block');
+    } else if (useContinuousScroll.value) {
+        base.push('relative', 'w-full', 'min-h-0');
     } else if (isLessonDesktopViewer.value) {
         base.push('relative', 'pdf-lesson-canvas-wrap');
     } else if (lessonMobileScrollInner.value) {
@@ -1409,6 +1735,9 @@ watch(isDesktopViewport, (isDesktop) => {
     if (!isDesktop) {
         fullscreenNavVisible.value = false;
     }
+    if (pdfDocs.value.length && !loading.value) {
+        void renderCurrentPage();
+    }
 });
 
 watch(isLessonMobile, () => {
@@ -1418,6 +1747,7 @@ watch(isLessonMobile, () => {
 watch(isFullscreen, () => {
     void nextTick(() => {
         bindLessonTouchGestures();
+        bindContinuousScroll();
         void renderCurrentPage();
     });
 });
@@ -1445,8 +1775,147 @@ watch([isLessonVariant, loading, error], () => {
             class="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden"
             :class="isLessonVariant ? 'bg-[var(--lesson-surface)]' : 'rounded-lg border border-zinc-600 bg-zinc-950/80'"
         >
-            <!-- Toolbar -->
+            <!-- Toolbar mobile (aula): uma linha -->
             <div
+                v-if="isLessonVariant && isLessonMobile"
+                class="pdf-lesson-toolbar-mobile shrink-0 border-b border-[var(--lesson-border)] bg-[var(--lesson-surface)] px-2 py-1.5"
+            >
+                <div class="flex flex-nowrap items-center gap-1">
+                    <div class="flex shrink-0 items-center gap-0.5">
+                        <button
+                            type="button"
+                            class="pdf-tb-btn lesson-tb !px-1.5 !py-1"
+                            :disabled="globalPage <= 1 || loading || !!error"
+                            @click="prevPage"
+                        >
+                            ‹
+                        </button>
+                        <span
+                            v-if="totalPages > 0"
+                            class="min-w-[2.25rem] text-center text-[11px] font-semibold tabular-nums text-[var(--lesson-text-2)]"
+                        >
+                            {{ globalPage }}/{{ totalPages }}
+                        </span>
+                        <button
+                            type="button"
+                            class="pdf-tb-btn lesson-tb !px-1.5 !py-1"
+                            :disabled="globalPage >= totalPages || loading || !!error || totalPages === 0"
+                            @click="nextPage"
+                        >
+                            ›
+                        </button>
+                    </div>
+
+                    <div
+                        class="h-4 w-px shrink-0 bg-[var(--lesson-border)]"
+                        aria-hidden="true"
+                    />
+
+                    <div class="flex shrink-0 items-center gap-0.5">
+                        <button
+                            type="button"
+                            class="pdf-tb-btn lesson-tb !px-1 !py-1"
+                            title="Diminuir zoom"
+                            @click="zoomOut"
+                        >
+                            <ZoomOut class="h-3.5 w-3.5" />
+                        </button>
+                        <span class="min-w-[2.25rem] text-center text-[11px] tabular-nums text-[var(--lesson-text-3)]">
+                            {{ Math.round(zoomMul * 100) }}%
+                        </span>
+                        <button
+                            type="button"
+                            class="pdf-tb-btn lesson-tb !px-1 !py-1"
+                            title="Aumentar zoom"
+                            @click="zoomIn"
+                        >
+                            <ZoomIn class="h-3.5 w-3.5" />
+                        </button>
+                    </div>
+
+                    <div
+                        v-if="totalPages > 1 && totalPages <= PDF_STORY_STYLE_MAX_PAGES && !loading && !error"
+                        class="flex min-w-0 flex-1 items-center gap-px px-0.5"
+                        role="progressbar"
+                        :aria-valuenow="globalPage"
+                        aria-valuemin="1"
+                        :aria-valuemax="totalPages"
+                        aria-label="Progresso de leitura"
+                    >
+                        <div
+                            v-for="seg in lessonStorySegments"
+                            :key="`tb-seg-${seg}`"
+                            class="pdf-story-segment h-[3px] min-w-[2px] flex-1 rounded-full"
+                            :class="{
+                                'pdf-story-segment--done': seg < globalPage,
+                                'pdf-story-segment--current': seg === globalPage,
+                                'pdf-story-segment--future': seg > globalPage,
+                            }"
+                        />
+                    </div>
+                    <div
+                        v-else-if="totalPages > 1 && !loading && !error"
+                        class="mx-0.5 min-w-0 flex-1"
+                        role="progressbar"
+                        :aria-valuenow="globalPage"
+                        aria-valuemin="1"
+                        :aria-valuemax="totalPages"
+                        aria-label="Progresso de leitura"
+                    >
+                        <div class="h-1 w-full overflow-hidden rounded-full bg-[var(--lesson-border)]">
+                            <div
+                                class="h-full rounded-full transition-[width] duration-200"
+                                :style="{
+                                    width: `${lessonPdfProgressPct}%`,
+                                    backgroundColor: 'var(--student-primary, #0047b3)',
+                                }"
+                            />
+                        </div>
+                    </div>
+
+                    <div
+                        class="h-4 w-px shrink-0 bg-[var(--lesson-border)]"
+                        aria-hidden="true"
+                    />
+
+                    <div class="flex shrink-0 items-center gap-1">
+                        <button
+                            type="button"
+                            class="h-3.5 w-3.5 shrink-0 rounded-full border border-transparent bg-yellow-400"
+                            :class="highlightColor === 'yellow' ? 'ring-1 ring-[var(--lesson-text)]' : ''"
+                            title="Amarelo"
+                            @click="highlightColor = highlightColor === 'yellow' ? null : 'yellow'"
+                        />
+                        <button
+                            type="button"
+                            class="h-3.5 w-3.5 shrink-0 rounded-full border border-transparent bg-green-400"
+                            :class="highlightColor === 'green' ? 'ring-1 ring-[var(--lesson-text)]' : ''"
+                            title="Verde"
+                            @click="highlightColor = highlightColor === 'green' ? null : 'green'"
+                        />
+                        <button
+                            type="button"
+                            class="h-3.5 w-3.5 shrink-0 rounded-full border border-transparent bg-pink-400"
+                            :class="highlightColor === 'pink' ? 'ring-1 ring-[var(--lesson-text)]' : ''"
+                            title="Rosa"
+                            @click="highlightColor = highlightColor === 'pink' ? null : 'pink'"
+                        />
+                    </div>
+
+                    <button
+                        type="button"
+                        class="pdf-tb-btn lesson-tb ml-auto shrink-0 !px-1.5 !py-1"
+                        title="Tela cheia"
+                        @click="toggleFullscreen"
+                    >
+                        <component :is="isFullscreen ? Minimize2 : Maximize2" class="h-3.5 w-3.5" />
+                    </button>
+                </div>
+            </div>
+
+            <!-- Toolbar desktop / legado -->
+            <div
+                v-else
                 class="flex h-[42px] shrink-0 flex-wrap items-center gap-0.5 border-b px-2 sm:px-3.5"
                 :class="isLessonVariant ? 'border-[var(--lesson-border)] bg-[var(--lesson-surface)]' : 'border-zinc-700 bg-zinc-900/90'"
             >
@@ -1588,53 +2057,6 @@ watch([isLessonVariant, loading, error], () => {
                     class="flex min-h-0 min-w-0 flex-1 overflow-hidden"
                     :class="isLessonVariant && isLessonMobile ? 'flex-col' : ''"
                 >
-                    <!-- Progresso estilo Stories (mobile, ≤30 páginas) ou barra + texto (>30) -->
-                    <div
-                        v-if="isLessonVariant && isLessonMobile && totalPages > 1 && !loading && !error"
-                        class="shrink-0 border-b border-[var(--lesson-border)] bg-[var(--lesson-surface)] px-3 pb-2 pt-2"
-                        role="progressbar"
-                        aria-label="Progresso de leitura do PDF"
-                        :aria-valuenow="globalPage"
-                        aria-valuemin="1"
-                        :aria-valuemax="totalPages"
-                    >
-                        <template v-if="totalPages <= PDF_STORY_STYLE_MAX_PAGES">
-                            <div class="flex gap-1">
-                                <div
-                                    v-for="seg in lessonStorySegments"
-                                    :key="seg"
-                                    class="pdf-story-segment h-[3px] flex-1 min-w-[3px] rounded-full transition-colors"
-                                    :class="{
-                                        'pdf-story-segment--done': seg < globalPage,
-                                        'pdf-story-segment--current': seg === globalPage,
-                                        'pdf-story-segment--future': seg > globalPage,
-                                    }"
-                                />
-                            </div>
-                        </template>
-                        <template v-else>
-                            <div class="flex flex-col gap-1.5 sm:flex-row sm:items-center sm:gap-3">
-                                <div
-                                    class="h-2 w-full overflow-hidden rounded-full bg-[var(--lesson-border)]"
-                                    role="presentation"
-                                >
-                                    <div
-                                        class="h-full rounded-full transition-[width] duration-200 ease-out"
-                                        :style="{
-                                            width: `${lessonPdfProgressPct}%`,
-                                            backgroundColor: 'var(--student-primary, #0047b3)',
-                                        }"
-                                    />
-                                </div>
-                                <p
-                                    class="shrink-0 text-center text-[11px] font-semibold tabular-nums text-[var(--lesson-text-2)] sm:text-right"
-                                >
-                                    Página {{ globalPage }} de {{ totalPages }}
-                                </p>
-                            </div>
-                        </template>
-                    </div>
-
                     <!-- Área scroll do PDF -->
                     <div ref="canvasHostRef" :class="pdfCanvasHostClasses">
                         <div
@@ -1646,81 +2068,136 @@ watch([isLessonVariant, loading, error], () => {
 
                         <div :class="lessonScrollShellClass">
                             <div :class="lessonCanvasWrapClass">
-                            <canvas
-                                ref="canvasRef"
-                                :class="isLessonVariant ? 'pdf-lesson-main-canvas block shadow-lg' : 'max-w-full shadow-lg'"
-                            />
-                            <div
-                                v-if="loading"
-                                class="absolute inset-0 z-[4] flex min-h-[200px] min-w-[160px] flex-col items-center justify-center gap-3 px-4 text-center"
-                                :class="isLessonVariant ? 'bg-white/85 text-[var(--lesson-text-2)]' : 'bg-zinc-950/60 text-zinc-300'"
-                            >
                                 <div
-                                    class="pdf-loader-brand"
-                                    :class="{ 'pdf-loader-brand--has-logo': !!loadingLogoUrl }"
+                                    v-if="!loading && !error && useContinuousScroll && totalPages > 0"
+                                    ref="continuousWrapRef"
+                                    class="pdf-lesson-continuous-wrap flex w-full flex-col items-center"
                                 >
-                                    <img
-                                        v-if="loadingLogoUrl"
-                                        :src="loadingLogoUrl"
-                                        alt=""
-                                        class="pdf-loader-logo"
-                                    />
-                                    <div v-else class="pdf-loader-spinner" aria-hidden="true" />
+                                    <div
+                                        v-for="pg in pageNumberList"
+                                        :key="`pdf-page-${pg}`"
+                                        class="pdf-lesson-page-block"
+                                        :data-pdf-page="pg"
+                                    >
+                                        <canvas
+                                            class="pdf-lesson-main-canvas pdf-lesson-page-canvas block shadow-lg"
+                                        />
+                                        <div
+                                            v-if="pdfDocumentReady"
+                                            class="absolute inset-0 z-[3]"
+                                            :class="
+                                                highlightColor && pg === globalPage
+                                                    ? 'pointer-events-auto'
+                                                    : 'pointer-events-none'
+                                            "
+                                            @pointerdown.prevent="overlayPointerDown(pg, $event)"
+                                            @pointermove.prevent="overlayPointerMove(pg, $event)"
+                                            @pointerup.prevent="overlayPointerUp(pg, $event)"
+                                            @pointerleave="overlayPointerUp(pg, $event)"
+                                        >
+                                            <div
+                                                v-for="h in highlightsForPage(pg)"
+                                                :key="h.id"
+                                                class="pointer-events-auto absolute cursor-pointer mix-blend-multiply"
+                                                :class="{
+                                                    'bg-yellow-400/45': h.color === 'yellow',
+                                                    'bg-green-400/45': h.color === 'green',
+                                                    'bg-pink-400/45': h.color === 'pink',
+                                                }"
+                                                :style="{
+                                                    left: `${h.x * 100}%`,
+                                                    top: `${h.y * 100}%`,
+                                                    width: `${h.width * 100}%`,
+                                                    height: `${h.height * 100}%`,
+                                                }"
+                                                title="Duplo clique para remover"
+                                                @dblclick.prevent="removeHighlight(h.id)"
+                                            />
+                                            <div
+                                                v-if="selectionRectCss && selecting && pg === globalPage"
+                                                class="pointer-events-none absolute border-2 border-dashed border-amber-300 bg-amber-400/20"
+                                                :style="selectionRectCss"
+                                            />
+                                        </div>
+                                    </div>
                                 </div>
-                                <p class="text-sm font-medium">{{ loadingStatusText }}</p>
-                            </div>
-                            <div
-                                v-else-if="error"
-                                class="absolute inset-0 z-[4] flex flex-col items-center justify-center gap-3 p-4 text-center text-sm"
-                                :class="isLessonVariant ? 'bg-white/90 text-red-600' : 'bg-zinc-950/80 text-red-200'"
-                            >
-                                <p>{{ error }}</p>
-                                <button
-                                    type="button"
-                                    class="rounded-lg border px-4 py-2 text-xs font-semibold transition hover:opacity-90"
-                                    :class="
-                                        isLessonVariant
-                                            ? 'border-[var(--lesson-border)] bg-[var(--lesson-bg)] text-[var(--lesson-text)]'
-                                            : 'border-zinc-600 bg-zinc-800 text-zinc-100'
-                                    "
-                                    @click="loadDocuments"
+                                <template v-else>
+                                    <canvas
+                                        ref="canvasRef"
+                                        :class="isLessonVariant ? 'pdf-lesson-main-canvas block shadow-lg' : 'max-w-full shadow-lg'"
+                                    />
+                                    <div
+                                        v-if="mainCanvasReady && !loading && !error && totalPages > 0"
+                                        class="absolute inset-0 z-[3]"
+                                        :class="highlightColor ? 'pointer-events-auto' : 'pointer-events-none'"
+                                        @pointerdown.prevent="overlayPointerDown(globalPage, $event)"
+                                        @pointermove.prevent="overlayPointerMove(globalPage, $event)"
+                                        @pointerup.prevent="overlayPointerUp(globalPage, $event)"
+                                        @pointerleave="overlayPointerUp(globalPage, $event)"
+                                    >
+                                        <div
+                                            v-for="h in currentPageHighlights"
+                                            :key="h.id"
+                                            class="pointer-events-auto absolute cursor-pointer mix-blend-multiply"
+                                            :class="{
+                                                'bg-yellow-400/45': h.color === 'yellow',
+                                                'bg-green-400/45': h.color === 'green',
+                                                'bg-pink-400/45': h.color === 'pink',
+                                            }"
+                                            :style="{
+                                                left: `${h.x * 100}%`,
+                                                top: `${h.y * 100}%`,
+                                                width: `${h.width * 100}%`,
+                                                height: `${h.height * 100}%`,
+                                            }"
+                                            title="Duplo clique para remover"
+                                            @dblclick.prevent="removeHighlight(h.id)"
+                                        />
+                                        <div
+                                            v-if="selectionRectCss && selecting"
+                                            class="pointer-events-none absolute border-2 border-dashed border-amber-300 bg-amber-400/20"
+                                            :style="selectionRectCss"
+                                        />
+                                    </div>
+                                </template>
+                                <div
+                                    v-if="loading"
+                                    class="absolute inset-0 z-30 flex min-h-[200px] min-w-[160px] flex-col items-center justify-center gap-3 px-4 text-center"
+                                    :class="isLessonVariant ? 'bg-white text-[var(--lesson-text-2)]' : 'bg-zinc-950/60 text-zinc-300'"
                                 >
-                                    Tentar novamente
-                                </button>
-                            </div>
-                            <div
-                                v-if="mainCanvasReady && !loading && !error && totalPages > 0"
-                                class="absolute inset-0 z-[3]"
-                                :class="highlightColor ? 'pointer-events-auto' : 'pointer-events-none'"
-                                @pointerdown.prevent="overlayPointerDown"
-                                @pointermove.prevent="overlayPointerMove"
-                                @pointerup.prevent="overlayPointerUp"
-                                @pointerleave="overlayPointerUp"
-                            >
+                                    <div
+                                        class="pdf-loader-brand"
+                                        :class="{ 'pdf-loader-brand--has-logo': !!loadingLogoUrl }"
+                                    >
+                                        <img
+                                            v-if="loadingLogoUrl"
+                                            :src="loadingLogoUrl"
+                                            alt=""
+                                            class="pdf-loader-logo"
+                                        />
+                                        <div v-else class="pdf-loader-spinner" aria-hidden="true" />
+                                    </div>
+                                    <p class="text-sm font-medium">{{ loadingStatusText }}</p>
+                                </div>
                                 <div
-                                    v-for="h in currentPageHighlights"
-                                    :key="h.id"
-                                    class="pointer-events-auto absolute cursor-pointer mix-blend-multiply"
-                                    :class="{
-                                        'bg-yellow-400/45': h.color === 'yellow',
-                                        'bg-green-400/45': h.color === 'green',
-                                        'bg-pink-400/45': h.color === 'pink',
-                                    }"
-                                    :style="{
-                                        left: `${h.x * 100}%`,
-                                        top: `${h.y * 100}%`,
-                                        width: `${h.width * 100}%`,
-                                        height: `${h.height * 100}%`,
-                                    }"
-                                    title="Duplo clique para remover"
-                                    @dblclick.prevent="removeHighlight(h.id)"
-                                />
-                                <div
-                                    v-if="selectionRectCss && selecting"
-                                    class="pointer-events-none absolute border-2 border-dashed border-amber-300 bg-amber-400/20"
-                                    :style="selectionRectCss"
-                                />
-                            </div>
+                                    v-else-if="error"
+                                    class="absolute inset-0 z-[4] flex flex-col items-center justify-center gap-3 p-4 text-center text-sm"
+                                    :class="isLessonVariant ? 'bg-white/90 text-red-600' : 'bg-zinc-950/80 text-red-200'"
+                                >
+                                    <p>{{ error }}</p>
+                                    <button
+                                        type="button"
+                                        class="rounded-lg border px-4 py-2 text-xs font-semibold transition hover:opacity-90"
+                                        :class="
+                                            isLessonVariant
+                                                ? 'border-[var(--lesson-border)] bg-[var(--lesson-bg)] text-[var(--lesson-text)]'
+                                                : 'border-zinc-600 bg-zinc-800 text-zinc-100'
+                                        "
+                                        @click="loadDocuments"
+                                    >
+                                        Tentar novamente
+                                    </button>
+                                </div>
                             </div>
                         </div>
 
@@ -1770,18 +2247,18 @@ watch([isLessonVariant, loading, error], () => {
                 >
                     <div
                         ref="thumbsScrollMobileRef"
-                        class="flex max-h-[92px] flex-row flex-nowrap gap-2 overflow-x-auto overflow-y-hidden px-2 py-2 scroll-smooth"
+                        class="flex max-h-[72px] flex-row flex-nowrap gap-1.5 overflow-x-auto overflow-y-hidden px-2 py-1.5 scroll-smooth"
                     >
                         <button
                             v-for="pg in totalPages"
                             :key="`lesson-mob-${pg}`"
                             :data-page="pg"
                             type="button"
-                            class="relative h-[72px] w-[52px] shrink-0 overflow-hidden rounded-md border-2 bg-white shadow-sm transition"
+                            class="relative h-[56px] w-[40px] shrink-0 overflow-hidden rounded-md border-2 bg-white shadow-sm transition"
                             :class="pg === globalPage ? 'border-[var(--student-primary,#0047b3)]' : 'border-transparent hover:border-[var(--lesson-border2)]'"
                             @click="goToGlobalPage(pg)"
                         >
-                            <canvas :ref="(el) => setThumbRef(pg, el)" class="mx-auto block h-auto max-h-[64px] w-full" />
+                            <canvas :ref="(el) => setThumbRef(pg, el)" class="mx-auto block h-auto max-h-[48px] w-full" />
                             <span class="absolute bottom-0.5 right-1 text-[9px] font-bold text-[var(--lesson-text-3)]">{{ pg }}</span>
                         </button>
                     </div>
@@ -1890,6 +2367,35 @@ watch([isLessonVariant, loading, error], () => {
     flex-shrink: 0;
 }
 
+.pdf-lesson-continuous-doc {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    width: 100%;
+}
+
+.pdf-lesson-continuous-wrap {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    width: 100%;
+    max-width: none;
+}
+
+.pdf-lesson-page-block {
+    position: relative;
+    display: inline-block;
+    flex: 0 0 auto;
+    max-width: none;
+    margin: 0 auto 12px;
+    line-height: 0;
+    vertical-align: top;
+}
+
+.pdf-lesson-page-block:last-child {
+    margin-bottom: 0;
+}
+
 .pdf-lesson-canvas-wrap--loading {
     min-height: 200px;
     min-width: 160px;
@@ -1986,6 +2492,14 @@ watch([isLessonVariant, loading, error], () => {
 .pdf-story-segment--current {
     background-color: var(--student-primary, #0047b3);
     opacity: 0.85;
+}
+
+.pdf-lesson-toolbar-mobile {
+    -webkit-overflow-scrolling: touch;
+}
+
+.pdf-lesson-toolbar-mobile .pdf-tb-btn.lesson-tb {
+    font-size: 12px;
 }
 
 </style>

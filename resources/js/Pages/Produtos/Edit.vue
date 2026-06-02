@@ -35,6 +35,8 @@ import {
 } from 'lucide-vue-next';
 import axios from 'axios';
 import EmailTemplatePreview from '@/components/produtos/EmailTemplatePreview.vue';
+import TenantMediaLibraryPicker from '@/components/media-library/TenantMediaLibraryPicker.vue';
+import { FolderOpen } from 'lucide-vue-next';
 
 function getCsrfToken() {
     const match = document.cookie.match(/XSRF-TOKEN=([^;]+)/);
@@ -369,6 +371,7 @@ const form = useForm({
     course_access_days: props.produto.course_access_days ?? '',
     image: null,
     member_area_cover: null,
+    library_image_item_id: null,
     conversion_pixels: mergeConversionPixels(props.produto.conversion_pixels),
     deliverable_link: props.produto.checkout_config?.deliverable_link ?? '',
     payment_gateways: {
@@ -422,7 +425,11 @@ const COURSE_COVER_HEIGHT = 663;
 
 const isAreaMembrosProduct = computed(() => (form.type || props.produto.type) === 'area_membros');
 
+const productImageLibraryOpen = ref(false);
+const libraryImagePreviewUrl = ref(null);
+
 const currentImageUrl = computed(() => {
+    if (libraryImagePreviewUrl.value) return libraryImagePreviewUrl.value;
     if (form.image && typeof form.image === 'object' && form.image instanceof File) {
         return URL.createObjectURL(form.image);
     }
@@ -431,6 +438,7 @@ const currentImageUrl = computed(() => {
 
 /** Capa única (checkout + hub /area-membros) para produtos tipo área de membros. */
 const currentCourseCoverUrl = computed(() => {
+    if (libraryImagePreviewUrl.value) return libraryImagePreviewUrl.value;
     if (form.image && typeof form.image === 'object' && form.image instanceof File) {
         return URL.createObjectURL(form.image);
     }
@@ -1133,6 +1141,19 @@ const showCreateCheckoutModal = ref(false);
 function onFileChange(e) {
     const file = e.target.files?.[0];
     form.image = file || null;
+    if (file) {
+        libraryImagePreviewUrl.value = null;
+        form.library_image_item_id = null;
+    }
+}
+
+function onProductImageFromLibrary(picked) {
+    const item = Array.isArray(picked) ? picked[0] : null;
+    if (!item?.url || !item.library_item_id) return;
+    libraryImagePreviewUrl.value = item.url;
+    form.library_image_item_id = item.library_item_id;
+    form.image = null;
+    productImageLibraryOpen.value = false;
 }
 
 const inputClass =
@@ -1294,6 +1315,8 @@ function submit() {
         fd.append('_method', 'PUT');
         if (form.image) {
             fd.append('image', form.image);
+        } else if (form.library_image_item_id) {
+            fd.append('library_image_item_id', String(form.library_image_item_id));
         }
         form.transform(() => fd).post(url, { forceFormData: true });
     } else {
@@ -1303,6 +1326,9 @@ function submit() {
             }
             if (data.course_access_days === '' || data.course_access_days == null) {
                 data.course_access_days = null;
+            }
+            if (!form.image && form.library_image_item_id) {
+                data.library_image_item_id = form.library_image_item_id;
             }
             return data;
         }).put(url);
@@ -1476,6 +1502,14 @@ function submit() {
                                         </template>
                                         <input type="file" accept="image/*" class="hidden" @change="onFileChange" />
                                     </label>
+                                    <button
+                                        type="button"
+                                        class="mt-2 inline-flex items-center gap-1.5 text-xs font-semibold text-sky-700 hover:underline dark:text-sky-300"
+                                        @click="productImageLibraryOpen = true"
+                                    >
+                                        <FolderOpen class="h-3.5 w-3.5" />
+                                        Da biblioteca
+                                    </button>
                                 </div>
                                 <div v-else class="flex flex-col items-start">
                                     <label class="mb-2 block text-sm font-medium text-zinc-700 dark:text-zinc-300">Imagem do produto</label>
@@ -1495,6 +1529,14 @@ function submit() {
                                         </template>
                                         <input type="file" accept="image/*" class="hidden" @change="onFileChange" />
                                     </label>
+                                    <button
+                                        type="button"
+                                        class="mt-2 inline-flex items-center gap-1.5 text-xs font-semibold text-sky-700 hover:underline dark:text-sky-300"
+                                        @click="productImageLibraryOpen = true"
+                                    >
+                                        <FolderOpen class="h-3.5 w-3.5" />
+                                        Da biblioteca
+                                    </button>
                                 </div>
                                 <div v-if="false" class="flex flex-col items-start">
                                     <label class="mb-2 block text-sm font-medium text-zinc-700 dark:text-zinc-300">Capa da Área de Membros</label>
@@ -3227,4 +3269,12 @@ function submit() {
         </template>
         </div>
     </div>
+
+    <TenantMediaLibraryPicker
+        :open="productImageLibraryOpen"
+        :max-pick="1"
+        locked-media-type="image"
+        @close="productImageLibraryOpen = false"
+        @select="onProductImageFromLibrary"
+    />
 </template>

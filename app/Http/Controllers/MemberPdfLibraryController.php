@@ -10,6 +10,7 @@ use App\Services\StorageService;
 use App\Services\TeamAccessService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Http\UploadedFile;
 
 class MemberPdfLibraryController extends Controller
 {
@@ -22,10 +23,15 @@ class MemberPdfLibraryController extends Controller
         $perPage = min(48, max(12, (int) $request->query('per_page', 24)));
         $search = $request->query('q');
         $filterProductId = $request->query('product_id');
+        $mediaType = $request->query('media_type');
         $folderId = $this->parseFolderIdQuery($request->query('folder_id'));
+
+        $currentFolder = null;
+        $breadcrumb = [];
 
         if ($folderId !== null) {
             $currentFolder = $library->findFolderForTenant($tenantId, $folderId);
+            $breadcrumb = $library->breadcrumbForFolder($currentFolder);
         }
 
         $paginator = $library->paginateForTenant(
@@ -33,7 +39,8 @@ class MemberPdfLibraryController extends Controller
             $perPage,
             is_string($search) ? $search : null,
             is_string($filterProductId) ? $filterProductId : null,
-            $folderId
+            $folderId,
+            is_string($mediaType) ? $mediaType : null
         );
 
         $items = $paginator->getCollection()
@@ -41,13 +48,20 @@ class MemberPdfLibraryController extends Controller
             ->values()
             ->all();
 
-        $allFolders = $library->listFolders($tenantId)
+        $childFolders = $library->listFolders($tenantId, $folderId)
             ->map(fn (MemberPdfLibraryFolder $f) => $library->folderToPublicPayload($f))
             ->values()
             ->all();
 
+        $allFolders = $library->listAllFoldersFlat($tenantId)
+            ->map(fn (MemberPdfLibraryFolder $f) => $library->folderToPublicPayload($f, true))
+            ->values()
+            ->all();
+
         return response()->json([
-            'folders' => $allFolders,
+            'child_folders' => $childFolders,
+            'folders' => $childFolders,
+            'all_folders' => $allFolders,
             'items' => $items,
             'meta' => [
                 'current_page' => $paginator->currentPage(),
@@ -55,7 +69,8 @@ class MemberPdfLibraryController extends Controller
                 'per_page' => $paginator->perPage(),
                 'total' => $paginator->total(),
             ],
-            'current_folder' => isset($currentFolder)
+            'breadcrumb' => $breadcrumb,
+            'current_folder' => $currentFolder
                 ? $library->folderToPublicPayload($currentFolder)
                 : null,
         ]);
@@ -66,14 +81,21 @@ class MemberPdfLibraryController extends Controller
         $this->authorizeProduct($produto);
         $library = $this->libraryForProduct($produto);
 
-        $maxKb = (int) config('member_builder_uploads.pdf_max_kb', 51200);
+        /** @var UploadedFile $file */
+        $file = $request->file('file');
+        $mime = $file?->getMimeType() ?: 'application/octet-stream';
+        $maxKb = $library->maxKbForMime($mime);
+
         $validated = $request->validate([
-            'file' => ['required', 'file', 'mimetypes:application/pdf', 'max:'.$maxKb],
+            'file' => array_merge(
+                ['required', 'file', 'max:'.$maxKb],
+                $library->storeMimetypesRule()
+            ),
             'folder_id' => ['nullable', 'integer', 'exists:member_pdf_library_folders,id'],
         ], [
             'file.required' => 'Nenhum arquivo enviado.',
-            'file.mimetypes' => 'O arquivo deve ser um material em formato PDF.',
-            'file.max' => 'O PDF deve ter no máximo '.(int) max(1, floor($maxKb / 1024)).' MB.',
+            'file.mimetypes' => 'Formato não suportado. Use imagens, PDF, documentos Office, ZIP ou TXT.',
+            'file.max' => 'O arquivo deve ter no máximo '.(int) max(1, floor($maxKb / 1024)).' MB.',
         ]);
 
         $folderId = isset($validated['folder_id']) ? (int) $validated['folder_id'] : null;
@@ -90,7 +112,7 @@ class MemberPdfLibraryController extends Controller
         $payload = $library->toPublicPayload($item, 0);
 
         return response()->json([
-            'message' => 'PDF adicionado à biblioteca.',
+            'message' => 'Arquivo adicionado à biblioteca.',
             'item' => $payload,
             'url' => $payload['url'],
             'path' => $item->storage_path,
@@ -105,13 +127,16 @@ class MemberPdfLibraryController extends Controller
 
         $validated = $request->validate([
             'name' => ['required', 'string', 'max:120'],
+            'parent_id' => ['nullable', 'integer', 'exists:member_pdf_library_folders,id'],
         ]);
 
-        $folder = $library->createFolder((int) $produto->tenant_id, $validated['name']);
+        $parentId = isset($validated['parent_id']) ? (int) $validated['parent_id'] : null;
+
+        $folder = $library->createFolder((int) $produto->tenant_id, $validated['name'], $parentId);
 
         return response()->json([
             'message' => 'Pasta criada.',
-            'folder' => $library->folderToPublicPayload($folder->loadCount('items')),
+            'folder' => $library->folderToPublicPayload($folder->loadCount(['items', 'children'])),
         ], 201);
     }
 
@@ -129,7 +154,7 @@ class MemberPdfLibraryController extends Controller
 
         return response()->json([
             'message' => 'Pasta renomeada.',
-            'folder' => $library->folderToPublicPayload($folder->loadCount('items')),
+            'folder' => $library->folderToPublicPayload($folder->loadCount(['items', 'children'])),
         ]);
     }
 
@@ -161,7 +186,7 @@ class MemberPdfLibraryController extends Controller
         $item = $library->moveItem($item, $folderId);
 
         return response()->json([
-            'message' => 'PDF movido.',
+            'message' => 'Arquivo movido.',
             'item' => $library->toPublicPayload($item),
         ]);
     }
@@ -173,7 +198,7 @@ class MemberPdfLibraryController extends Controller
 
         $this->libraryForProduct($produto)->deleteIfUnused($item);
 
-        return response()->json(['message' => 'PDF removido da biblioteca.']);
+        return response()->json(['message' => 'Arquivo removido da biblioteca.']);
     }
 
     private function parseFolderIdQuery(mixed $value): ?int

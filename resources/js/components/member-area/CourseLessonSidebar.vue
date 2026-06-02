@@ -71,7 +71,7 @@ function lessonStatus(lesson, m) {
 
 <template>
     <aside
-        class="flex h-full w-full shrink-0 flex-col border-l border-[var(--lesson-border)] bg-[var(--lesson-surface)] lg:w-[var(--lesson-rs-w,308px)]"
+        class="flex h-full w-full shrink-0 flex-col border-l border-[var(--lesson-border,#d5dded)] bg-white bg-[var(--lesson-surface,#ffffff)] lg:w-[var(--lesson-rs-w,308px)]"
     >
         <div class="shrink-0 border-b border-[var(--lesson-border)] p-4">
             <div class="mb-3 flex items-start justify-between gap-2">

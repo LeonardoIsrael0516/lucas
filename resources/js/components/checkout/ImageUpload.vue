@@ -1,7 +1,8 @@
 <script setup>
 import { ref, computed } from 'vue';
 import axios from 'axios';
-import { Upload, Loader2, X } from 'lucide-vue-next';
+import { Upload, Loader2, X, FolderOpen } from 'lucide-vue-next';
+import TenantMediaLibraryPicker from '@/components/media-library/TenantMediaLibraryPicker.vue';
 
 const props = defineProps({
     modelValue: { type: String, default: '' },
@@ -10,6 +11,7 @@ const props = defineProps({
     accept: { type: String, default: 'image/*' },
     /** Tamanho ideal em texto, ex: "1200×630 px" */
     recommendedSize: { type: String, default: '' },
+    enableLibraryPick: { type: Boolean, default: true },
 });
 
 const emit = defineEmits(['update:modelValue']);
@@ -61,6 +63,16 @@ function remove() {
 }
 
 const inputId = computed(() => `img-upload-${Math.random().toString(36).slice(2)}`);
+
+const libraryOpen = ref(false);
+
+function onLibrarySelect(picked) {
+    const item = Array.isArray(picked) ? picked[0] : null;
+    if (!item?.url) return;
+    emit('update:modelValue', item.url);
+    libraryOpen.value = false;
+    error.value = '';
+}
 </script>
 
 <template>
@@ -109,10 +121,28 @@ const inputId = computed(() => `img-upload-${Math.random().toString(36).slice(2)
                     <Upload v-else class="h-4 w-4" />
                     {{ uploading ? 'Enviando…' : 'Subir imagem' }}
                 </label>
+                <button
+                    v-if="enableLibraryPick"
+                    type="button"
+                    class="inline-flex items-center gap-2 rounded-xl border-2 border-zinc-200 bg-white px-4 py-2.5 text-sm font-medium text-zinc-700 transition hover:border-sky-400 hover:text-sky-700 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-300"
+                    @click="libraryOpen = true"
+                >
+                    <FolderOpen class="h-4 w-4" />
+                    Da biblioteca
+                </button>
             </div>
             <p v-if="error" class="text-sm font-medium text-red-600 dark:text-red-400">
                 {{ error }}
             </p>
         </div>
     </div>
+
+    <TenantMediaLibraryPicker
+        v-if="enableLibraryPick"
+        :open="libraryOpen"
+        :max-pick="1"
+        locked-media-type="image"
+        @close="libraryOpen = false"
+        @select="onLibrarySelect"
+    />
 </template>

@@ -14,6 +14,8 @@ use Inertia\Response;
 
 class SettingsController extends Controller
 {
+    use Concerns\RegistersMediaLibraryUploads;
+
     public function index(): Response
     {
         $tenantId = auth()->user()->tenant_id;
@@ -237,7 +239,9 @@ class SettingsController extends Controller
         if ($request->hasFile('login_logo')) {
             try {
                 $storage = app(\App\Services\StorageService::class);
-                $path = $storage->putFile('branding', $request->file('login_logo'));
+                $file = $request->file('login_logo');
+                $path = $storage->putFile('branding', $file);
+                $this->registerMediaLibraryUpload($path, $file, (int) $tenantId, null, (int) $request->user()->id);
                 Setting::set('login_logo', $path, $tenantId);
             } catch (\Throwable $e) {
                 report($e);
@@ -246,7 +250,9 @@ class SettingsController extends Controller
         if ($request->hasFile('login_background_image')) {
             try {
                 $storage = app(\App\Services\StorageService::class);
-                $path = $storage->putFile('branding', $request->file('login_background_image'));
+                $file = $request->file('login_background_image');
+                $path = $storage->putFile('branding', $file);
+                $this->registerMediaLibraryUpload($path, $file, (int) $tenantId, null, (int) $request->user()->id);
                 Setting::set('login_background_image', $path, $tenantId);
             } catch (\Throwable $e) {
                 report($e);

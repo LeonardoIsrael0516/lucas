@@ -17,6 +17,8 @@ use Inertia\Response;
 
 class StudentAreaManageController extends Controller
 {
+    use Concerns\RegistersMediaLibraryUploads;
+
     use BuildsCommunityPagePayload;
 
     private function tenantId(): ?int
@@ -213,9 +215,21 @@ class StudentAreaManageController extends Controller
         $tenantId = $this->tenantId();
         $request->validate(['file' => ['required', 'file', 'image', 'max:5120']]);
         $storage = new StorageService($tenantId);
-        $path = $storage->putFile('member-area-community', $request->file('file'));
+        $file = $request->file('file');
+        $path = $storage->putFile('member-area-community', $file);
+        $libraryItem = $this->registerMediaLibraryUpload(
+            $path,
+            $file,
+            $tenantId,
+            null,
+            (int) $request->user()->id
+        );
 
-        return response()->json(['path' => $path, 'url' => $storage->url($path)]);
+        return response()->json([
+            'path' => $path,
+            'url' => $storage->url($path),
+            'library_item_id' => $libraryItem->id,
+        ]);
     }
 
     public function certificado(): Response
@@ -284,9 +298,21 @@ class StudentAreaManageController extends Controller
         $tenantId = $this->tenantId();
         $request->validate(['file' => ['required', 'file', 'image', 'max:5120']]);
         $storage = new StorageService($tenantId);
-        $path = $storage->putFile('member-area-gamification', $request->file('file'));
+        $file = $request->file('file');
+        $path = $storage->putFile('member-area-gamification', $file);
+        $libraryItem = $this->registerMediaLibraryUpload(
+            $path,
+            $file,
+            $tenantId,
+            null,
+            (int) $request->user()->id
+        );
 
-        return response()->json(['path' => $path, 'url' => $storage->url($path)]);
+        return response()->json([
+            'path' => $path,
+            'url' => $storage->url($path),
+            'library_item_id' => $libraryItem->id,
+        ]);
     }
 
     /**
@@ -312,11 +338,17 @@ class StudentAreaManageController extends Controller
 
         if ($request->hasFile('login_logo')) {
             $storage = new StorageService($tenantId);
-            Setting::set('login_logo', $storage->putFile('branding', $request->file('login_logo')), $tenantId);
+            $file = $request->file('login_logo');
+            $path = $storage->putFile('branding', $file);
+            $this->registerMediaLibraryUpload($path, $file, $tenantId, null, (int) $request->user()->id);
+            Setting::set('login_logo', $path, $tenantId);
         }
         if ($request->hasFile('login_background_image')) {
             $storage = new StorageService($tenantId);
-            Setting::set('login_background_image', $storage->putFile('branding', $request->file('login_background_image')), $tenantId);
+            $file = $request->file('login_background_image');
+            $path = $storage->putFile('branding', $file);
+            $this->registerMediaLibraryUpload($path, $file, $tenantId, null, (int) $request->user()->id);
+            Setting::set('login_background_image', $path, $tenantId);
         }
     }
 

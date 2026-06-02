@@ -10,6 +10,16 @@ class MemberPdfLibraryItem extends Model
 {
     use SoftDeletes;
 
+    public const TYPE_IMAGE = 'image';
+
+    public const TYPE_PDF = 'pdf';
+
+    public const TYPE_DOCUMENT = 'document';
+
+    public const TYPE_ARCHIVE = 'archive';
+
+    public const TYPE_OTHER = 'other';
+
     protected $fillable = [
         'tenant_id',
         'product_id',
@@ -19,7 +29,42 @@ class MemberPdfLibraryItem extends Model
         'storage_path',
         'file_size',
         'mime',
+        'media_type',
     ];
+
+    public static function resolveMediaType(string $mime): string
+    {
+        $mime = strtolower(trim($mime));
+
+        if (str_starts_with($mime, 'image/')) {
+            return self::TYPE_IMAGE;
+        }
+
+        if ($mime === 'application/pdf') {
+            return self::TYPE_PDF;
+        }
+
+        if (in_array($mime, [
+            'application/zip',
+            'application/x-zip-compressed',
+        ], true)) {
+            return self::TYPE_ARCHIVE;
+        }
+
+        if (in_array($mime, [
+            'application/msword',
+            'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            'application/vnd.ms-excel',
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            'application/vnd.ms-powerpoint',
+            'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+            'text/plain',
+        ], true)) {
+            return self::TYPE_DOCUMENT;
+        }
+
+        return self::TYPE_OTHER;
+    }
 
     protected function casts(): array
     {

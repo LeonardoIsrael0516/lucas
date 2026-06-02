@@ -17,6 +17,8 @@ use Symfony\Component\HttpFoundation\Response as HttpResponse;
 
 class CheckoutConfigController extends Controller
 {
+    use Concerns\RegistersMediaLibraryUploads;
+
     public function edit(Request $request, Product $produto): Response
     {
         $this->authorizeProduct($produto);
@@ -145,9 +147,19 @@ class CheckoutConfigController extends Controller
         $file = $request->file('image');
         $name = Str::uuid() . '.' . $file->getClientOriginalExtension();
         $path = $storage->putFileAs('checkout/' . $produto->id, $file, $name);
+        $libraryItem = $this->registerMediaLibraryUpload(
+            $path,
+            $file,
+            (int) $produto->tenant_id,
+            (string) $produto->id,
+            (int) $request->user()->id
+        );
         $url = $storage->url($path);
 
-        return response()->json(['url' => $url], HttpResponse::HTTP_CREATED);
+        return response()->json([
+            'url' => $url,
+            'library_item_id' => $libraryItem->id,
+        ], HttpResponse::HTTP_CREATED);
     }
 
     private function authorizeProduct(Product $produto): void

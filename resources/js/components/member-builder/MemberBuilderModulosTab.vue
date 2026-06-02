@@ -51,6 +51,7 @@ const emit = defineEmits([
     'delete-lesson',
     'save-lesson',
     'open-pdf-library',
+    'open-attachment-library',
     'clear-lesson-pdf',
     'remove-lesson-pdf-at',
     'add-resource-link',
@@ -111,7 +112,7 @@ function onMobileBackToLessons() {
                     @click="emit('open-pdf-library', 'manage')"
                 >
                     <FolderOpen class="h-3.5 w-3.5" />
-                    Biblioteca de PDFs
+                    Biblioteca de mídia
                 </button>
             </div>
         </div>
@@ -266,11 +267,8 @@ function onMobileBackToLessons() {
             <!-- Coluna 2: Aulas -->
             <section
                 v-if="selectedModuleId"
-                class="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-xl border border-zinc-200 bg-white dark:border-zinc-700 dark:bg-zinc-900/40 max-lg:fixed max-lg:inset-y-0 max-lg:right-0 max-lg:z-40 max-lg:w-full max-lg:max-w-md max-lg:shadow-xl"
-                :class="[
-                    lessonForm ? 'max-lg:hidden' : '',
-                    'lg:flex-1',
-                ]"
+                class="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-xl border border-zinc-200 bg-white dark:border-zinc-700 dark:bg-zinc-900/40 max-lg:fixed max-lg:inset-y-0 max-lg:right-0 max-lg:z-40 max-lg:w-full max-lg:max-w-md max-lg:shadow-xl lg:w-72 lg:shrink-0 xl:w-84"
+                :class="lessonForm ? 'max-lg:hidden' : ''"
             >
                 <div class="flex shrink-0 items-center gap-2 border-b border-zinc-200 px-3 py-2.5 dark:border-zinc-700">
                     <button
@@ -380,7 +378,7 @@ function onMobileBackToLessons() {
             <!-- Coluna 3: Editor -->
             <aside
                 v-if="selectedModuleId"
-                class="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-xl border border-zinc-200 bg-zinc-50/80 dark:border-zinc-700 dark:bg-zinc-800/40 lg:w-96 lg:shrink-0 xl:max-w-md"
+                class="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-xl border border-zinc-200 bg-zinc-50/80 dark:border-zinc-700 dark:bg-zinc-800/40 lg:min-w-[22rem] xl:min-w-[28rem]"
                 :class="
                     lessonForm
                         ? 'max-lg:fixed max-lg:inset-0 max-lg:z-50 max-lg:max-w-none max-lg:rounded-none max-lg:border-0'
@@ -529,7 +527,7 @@ function onMobileBackToLessons() {
                                         {{
                                             lessonForm.type === 'pdf'
                                                 ? 'Biblioteca de materiais'
-                                                : 'Biblioteca de PDFs'
+                                                : 'Biblioteca de mídia'
                                         }}
                                     </Button>
                                     <span
@@ -588,6 +586,7 @@ function onMobileBackToLessons() {
                                 @remove-resource-link-at="emit('remove-resource-link-at', $event)"
                                 @upload-attachment="emit('upload-attachment', $event)"
                                 @remove-attachment-at="emit('remove-attachment-at', $event)"
+                                @open-attachment-library="emit('open-attachment-library')"
                                 @go-comentarios="emit('go-comentarios')"
                             />
 

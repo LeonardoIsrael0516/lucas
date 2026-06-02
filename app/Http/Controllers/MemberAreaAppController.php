@@ -42,6 +42,8 @@ use Symfony\Component\HttpFoundation\Response as SymfonyResponse;
 
 class MemberAreaAppController extends Controller
 {
+    use Concerns\RegistersMediaLibraryUploads;
+
     use SharesStudentSupportProps;
 
     public function __construct(
@@ -1139,7 +1141,15 @@ class MemberAreaAppController extends Controller
         $imagePath = null;
         if ($request->hasFile('image')) {
             $storage = new StorageService($product->tenant_id);
-            $imagePath = $storage->putFile('member-area-posts/'.$product->id, $request->file('image'));
+            $file = $request->file('image');
+            $imagePath = $storage->putFile('member-area-posts/'.$product->id, $file);
+            $this->registerMediaLibraryUpload(
+                $imagePath,
+                $file,
+                (int) $product->tenant_id,
+                (string) $product->id,
+                (int) $request->user()->id
+            );
         }
         MemberCommunityPost::create([
             'member_community_page_id' => $page->id,

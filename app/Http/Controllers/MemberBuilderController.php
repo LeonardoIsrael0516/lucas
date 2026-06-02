@@ -36,6 +36,8 @@ use Inertia\Inertia;
 use Inertia\Response;
 class MemberBuilderController extends Controller
 {
+    use Concerns\RegistersMediaLibraryUploads;
+
     private function normalizeLessonContentFiles(mixed $input): array
     {
         if (! is_array($input)) {
@@ -103,10 +105,14 @@ class MemberBuilderController extends Controller
             if ($url === '' || ! filter_var($url, FILTER_VALIDATE_URL)) {
                 continue;
             }
-            $out[] = [
+            $entry = [
                 'url' => $url,
                 'name' => $name !== '' ? mb_substr($name, 0, 255) : 'Anexo',
             ];
+            if (isset($item['library_item_id']) && is_numeric($item['library_item_id'])) {
+                $entry['library_item_id'] = (int) $item['library_item_id'];
+            }
+            $out[] = $entry;
         }
 
         return array_slice($out, 0, 20);
@@ -538,8 +544,21 @@ class MemberBuilderController extends Controller
             'file.max' => 'A imagem deve ter no máximo '.(int) max(1, floor($maxKb / 1024)).' MB.',
         ]);
         $storage = app(StorageService::class);
-        $path = $storage->putFile('member-area/' . $produto->id, $request->file('file'));
-        return response()->json(['url' => $storage->url($path), 'path' => $path]);
+        $file = $request->file('file');
+        $path = $storage->putFile('member-area/' . $produto->id, $file);
+        $libraryItem = $this->registerMediaLibraryUpload(
+            $path,
+            $file,
+            (int) $produto->tenant_id,
+            (string) $produto->id,
+            (int) $request->user()->id
+        );
+
+        return response()->json([
+            'url' => $storage->url($path),
+            'path' => $path,
+            'library_item_id' => $libraryItem->id,
+        ]);
     }
 
     public function uploadPdf(Request $request, Product $produto): JsonResponse
@@ -593,11 +612,19 @@ class MemberBuilderController extends Controller
         $file = $request->file('file');
         $original = $file->getClientOriginalName() ?: 'anexo';
         $path = $storage->putFile('member-area/'.$produto->id.'/attachments', $file);
+        $libraryItem = $this->registerMediaLibraryUpload(
+            $path,
+            $file,
+            (int) $produto->tenant_id,
+            (string) $produto->id,
+            (int) $request->user()->id
+        );
 
         return response()->json([
             'url' => $storage->url($path),
             'path' => $path,
             'name' => $original,
+            'library_item_id' => $libraryItem->id,
         ]);
     }
 
@@ -646,8 +673,21 @@ class MemberBuilderController extends Controller
             'file.max' => 'A imagem da badge deve ter no máximo '.(int) max(1, floor($maxKb / 1024)).' MB.',
         ]);
         $storage = app(StorageService::class);
-        $path = $storage->putFile('member-area-gamification/' . $produto->id . '/badges', $request->file('file'));
-        return response()->json(['url' => $storage->url($path), 'path' => $path]);
+        $file = $request->file('file');
+        $path = $storage->putFile('member-area-gamification/' . $produto->id . '/badges', $file);
+        $libraryItem = $this->registerMediaLibraryUpload(
+            $path,
+            $file,
+            (int) $produto->tenant_id,
+            (string) $produto->id,
+            (int) $request->user()->id
+        );
+
+        return response()->json([
+            'url' => $storage->url($path),
+            'path' => $path,
+            'library_item_id' => $libraryItem->id,
+        ]);
     }
 
     // Sections

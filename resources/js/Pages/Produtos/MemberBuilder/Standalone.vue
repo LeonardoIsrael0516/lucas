@@ -2,7 +2,9 @@
 import { ref, computed, reactive, nextTick, onMounted, watch } from 'vue';
 import axios from 'axios';
 import MemberBuilderPreview from '@/components/member-builder/MemberBuilderPreview.vue';
-import PdfLibraryModal from '@/components/member-builder/PdfLibraryModal.vue';
+import MediaLibraryModal from '@/components/member-builder/MediaLibraryModal.vue';
+import TenantMediaLibraryPicker from '@/components/media-library/TenantMediaLibraryPicker.vue';
+import LibraryImagePickActions from '@/components/media-library/LibraryImagePickActions.vue';
 import MemberBuilderModulosTab from '@/components/member-builder/MemberBuilderModulosTab.vue';
 import LessonApplyTemplateModal from '@/components/member-builder/LessonApplyTemplateModal.vue';
 import Button from '@/components/ui/Button.vue';
@@ -551,6 +553,8 @@ const modulosLessonForm = ref(null);
 const modulosLessonFormSaving = ref(false);
 const pdfLibraryOpen = ref(false);
 const pdfLibraryMode = ref('pick');
+/** 'content' = PDF da aula; 'attachment' = anexos para download */
+const pdfLibraryPickTarget = ref('content');
 
 /** Material (download), apresentação ou leitor PDF — mesmos campos no backend. */
 function isLessonPdfContentType(type) {
@@ -664,7 +668,9 @@ function openModulosLessonForm(lesson) {
                 if (typeof it === 'string') return { url: it, name: 'Anexo' };
                 const url = (it?.url ?? '').toString().trim();
                 if (!url) return null;
-                return { url, name: (it?.name ?? 'Anexo').toString() };
+                const entry = { url, name: (it?.name ?? 'Anexo').toString() };
+                if (it?.library_item_id) entry.library_item_id = it.library_item_id;
+                return entry;
             })
             .filter(Boolean);
         modulosLessonForm.value = {
@@ -784,13 +790,22 @@ function closeModulosLessonForm() {
     modulosLessonForm.value = null;
 }
 
-function openPdfLibrary(mode = 'pick') {
+function openPdfLibrary(mode = 'pick', target = 'content') {
     pdfLibraryMode.value = mode;
+    pdfLibraryPickTarget.value = target;
     pdfLibraryOpen.value = true;
+}
+
+function openAttachmentLibrary() {
+    openPdfLibrary('pick', 'attachment');
 }
 
 function onLibraryPdfsSelected(picked) {
     if (!modulosLessonForm.value || !Array.isArray(picked) || !picked.length) return;
+    if (pdfLibraryPickTarget.value === 'attachment') {
+        onLibraryAttachmentsSelected(picked);
+        return;
+    }
     if (!Array.isArray(modulosLessonForm.value.content_files)) {
         modulosLessonForm.value.content_files = [];
     }
@@ -813,6 +828,30 @@ function onLibraryPdfsSelected(picked) {
     }
     const first = modulosLessonForm.value.content_files?.[0]?.url ?? '';
     modulosLessonForm.value.content_url = first || modulosLessonForm.value.content_url || '';
+}
+
+function onLibraryAttachmentsSelected(picked) {
+    if (!modulosLessonForm.value) return;
+    if (!Array.isArray(modulosLessonForm.value.attachment_files)) {
+        modulosLessonForm.value.attachment_files = [];
+    }
+    const existing = modulosLessonForm.value.attachment_files;
+    for (const item of picked) {
+        if (!item?.url) continue;
+        const dup = existing.some(
+            (f) =>
+                (item.library_item_id && f.library_item_id === item.library_item_id) ||
+                (f.url && f.url === item.url)
+        );
+        if (dup) continue;
+        if (existing.length >= 20) {
+            alert('Máximo de 20 anexos por aula.');
+            break;
+        }
+        const entry = { url: item.url, name: item.name || 'documento.pdf' };
+        if (item.library_item_id) entry.library_item_id = item.library_item_id;
+        existing.push(entry);
+    }
 }
 
 function clearLessonPdf() {
@@ -853,10 +892,16 @@ function lessonPayload(form) {
     }
     const attachmentFiles = Array.isArray(form.attachment_files)
         ? form.attachment_files
-              .map((it) => ({
-                  url: (it?.url ?? '').toString().trim(),
-                  name: (it?.name ?? '').toString().trim(),
-              }))
+              .map((it) => {
+                  const entry = {
+                      url: (it?.url ?? '').toString().trim(),
+                      name: (it?.name ?? '').toString().trim(),
+                  };
+                  if (it?.library_item_id) {
+                      entry.library_item_id = it.library_item_id;
+                  }
+                  return entry;
+              })
               .filter((it) => it.url)
         : [];
     const resource_links = (Array.isArray(form.resource_links) ? form.resource_links : [])
@@ -991,6 +1036,8 @@ const moduleModalReleaseAfterDays = ref('');
 const moduleModalReleaseAtDate = ref('');
 const moduleModalEditingId = ref(null);
 const moduleModalExistingThumbnail = ref(null);
+const moduleModalLibraryThumbUrl = ref(null);
+const moduleCoverLibraryOpen = ref(false);
 
 function openSectionEdit(section) {
     editingSectionTitle.value = section.title;
@@ -1039,6 +1086,7 @@ function fillModuleModalFromModule(mod) {
         moduleModalReleaseAtDate.value = '';
     }
     moduleModalExistingThumbnail.value = mod.thumbnail ?? null;
+    moduleModalLibraryThumbUrl.value = null;
 }
 
 function openModuleEdit(mod) {
@@ -1406,6 +1454,7 @@ function openModuleModal() {
     moduleModalReleaseAfterDays.value = '';
     moduleModalReleaseAtDate.value = '';
     moduleModalExistingThumbnail.value = null;
+    moduleModalLibraryThumbUrl.value = null;
     clearModuleModalFile();
     moduleModalOpen.value = true;
 }
@@ -1423,6 +1472,7 @@ function onModuleModalFileChange(event) {
     const file = event.target?.files?.[0];
     if (moduleModalFilePreviewUrl.value) URL.revokeObjectURL(moduleModalFilePreviewUrl.value);
     moduleModalFile.value = file || null;
+    moduleModalLibraryThumbUrl.value = null;
     moduleModalFilePreviewUrl.value = file && file.type.startsWith('image/') ? URL.createObjectURL(file) : '';
 }
 
@@ -1431,7 +1481,23 @@ function closeModuleModal() {
     moduleModalSectionId.value = null;
     moduleModalEditingId.value = null;
     moduleModalExistingThumbnail.value = null;
+    moduleModalLibraryThumbUrl.value = null;
     clearModuleModalFile();
+}
+
+const moduleCoverLibraryMode = ref('modal');
+
+function openModuleCoverLibrary(mode = 'modal') {
+    moduleCoverLibraryMode.value = mode;
+    moduleCoverLibraryOpen.value = true;
+}
+
+function onModuleCoverLibraryPicked(picked) {
+    if (moduleCoverLibraryMode.value === 'inline') {
+        onModuleThumbnailFromLibrary(picked);
+        return;
+    }
+    onModuleCoverFromLibrary(picked);
 }
 
 function buildModuleModalPayload() {
@@ -1462,15 +1528,49 @@ function buildModuleModalPayload() {
     return payload;
 }
 
-async function uploadModuleModalCover(moduleId) {
+async function applyModuleModalCover(moduleId) {
     const hasCoverFile = moduleModalFile.value && moduleModalFile.value.type.startsWith('image/');
-    if (!hasCoverFile) return null;
-    const formData = new FormData();
-    formData.append('file', moduleModalFile.value);
-    const up = await axios.post(uploadUrl.value, formData, { headers: uploadHeaders() });
-    if (!up.data?.url) return null;
-    await axios.put(`${base.value}/modules/${moduleId}`, { thumbnail: up.data.url }, { headers: headers() });
-    return up.data.url;
+    if (hasCoverFile) {
+        const formData = new FormData();
+        formData.append('file', moduleModalFile.value);
+        const up = await axios.post(uploadUrl.value, formData, { headers: uploadHeaders() });
+        if (!up.data?.url) return null;
+        await axios.put(`${base.value}/modules/${moduleId}`, { thumbnail: up.data.url }, { headers: headers() });
+        return up.data.url;
+    }
+    if (moduleModalLibraryThumbUrl.value) {
+        await axios.put(
+            `${base.value}/modules/${moduleId}`,
+            { thumbnail: moduleModalLibraryThumbUrl.value },
+            { headers: headers() }
+        );
+        return moduleModalLibraryThumbUrl.value;
+    }
+    return null;
+}
+
+function onModuleCoverFromLibrary(picked) {
+    const item = Array.isArray(picked) ? picked[0] : null;
+    if (!item?.url) return;
+    moduleModalLibraryThumbUrl.value = item.url;
+    moduleModalExistingThumbnail.value = item.url;
+    moduleModalFile.value = null;
+    if (moduleModalFilePreviewUrl.value) {
+        URL.revokeObjectURL(moduleModalFilePreviewUrl.value);
+        moduleModalFilePreviewUrl.value = '';
+    }
+    moduleCoverLibraryOpen.value = false;
+}
+
+async function onModuleThumbnailFromLibrary(picked) {
+    const item = Array.isArray(picked) ? picked[0] : null;
+    const id = editingModuleId.value;
+    if (!item?.url || !id) return;
+    moduleCoverLibraryOpen.value = false;
+    try {
+        await axios.put(`${base.value}/modules/${id}`, { thumbnail: item.url }, { headers: headers() });
+        reload();
+    } catch (_) {}
 }
 
 async function confirmModuleModal() {
@@ -1486,7 +1586,7 @@ async function confirmModuleModal() {
 
         if (editingId) {
             await axios.put(`${base.value}/modules/${editingId}`, payload, { headers: headers() });
-            const thumbUrl = await uploadModuleModalCover(editingId);
+            const thumbUrl = await applyModuleModalCover(editingId);
             const mod = findModuleById(editingId);
             if (mod) {
                 Object.assign(mod, payload);
@@ -1504,7 +1604,7 @@ async function confirmModuleModal() {
             return;
         }
         if (imported.length === 1) {
-            const thumbUrl = await uploadModuleModalCover(imported[0].id);
+            const thumbUrl = await applyModuleModalCover(imported[0].id);
             if (thumbUrl) {
                 imported[0] = { ...imported[0], thumbnail: thumbUrl };
             }
@@ -2157,6 +2257,7 @@ const inputClass = 'block w-full rounded-lg border border-zinc-300 bg-white px-3
                             @delete-lesson="deleteLesson"
                             @save-lesson="saveLessonFromSidebar"
                             @open-pdf-library="openPdfLibrary"
+                            @open-attachment-library="openAttachmentLibrary"
                             @clear-lesson-pdf="clearLessonPdf"
                             @remove-lesson-pdf-at="removeLessonPdfAt"
                             :comments-enabled="configForm.member_area_config.comments_enabled"
@@ -3239,17 +3340,25 @@ const inputClass = 'block w-full rounded-lg border border-zinc-300 bg-white px-3
                                         <Button type="button" size="sm" variant="ghost" class="mt-1 !py-0.5 !text-xs text-red-600" @click="clearModuleModalFile">Remover</Button>
                                     </div>
                                 </div>
-                                <div v-else-if="moduleModalExistingThumbnail" class="flex items-start gap-3">
-                                    <div :class="moduleModalCoverMode === 'horizontal' ? 'aspect-video w-28 shrink-0' : 'aspect-[2/3] h-20 w-14 shrink-0'" class="overflow-hidden rounded-lg border border-zinc-200 dark:border-zinc-600">
-                                        <img :src="moduleModalExistingThumbnail" alt="Capa atual" class="h-full w-full object-cover" />
+                                <div v-else-if="moduleModalExistingThumbnail" class="space-y-2">
+                                    <div class="flex items-start gap-3">
+                                        <div :class="moduleModalCoverMode === 'horizontal' ? 'aspect-video w-28 shrink-0' : 'aspect-[2/3] h-20 w-14 shrink-0'" class="overflow-hidden rounded-lg border border-zinc-200 dark:border-zinc-600">
+                                            <img :src="moduleModalExistingThumbnail" alt="Capa atual" class="h-full w-full object-cover" />
+                                        </div>
                                     </div>
-                                    <div class="flex-1 min-w-0">
-                                        <Button type="button" size="sm" variant="outline" class="w-full !py-2 !text-xs" @click="moduleModalFileInputRef?.click()">Trocar imagem</Button>
-                                    </div>
+                                    <LibraryImagePickActions
+                                        full-width
+                                        upload-label="Trocar imagem"
+                                        @upload="moduleModalFileInputRef?.click()"
+                                        @library="openModuleCoverLibrary('modal')"
+                                    />
                                 </div>
-                                <Button v-else type="button" size="sm" variant="outline" class="w-full !py-2 !text-xs" @click="moduleModalFileInputRef?.click()">
-                                    Escolher imagem
-                                </Button>
+                                <LibraryImagePickActions
+                                    v-else
+                                    full-width
+                                    @upload="moduleModalFileInputRef?.click()"
+                                    @library="openModuleCoverLibrary('modal')"
+                                />
                                 <p class="mt-1 text-xs text-zinc-500 dark:text-zinc-400">{{ moduleModalCoverMode === 'horizontal' ? 'Recomendado: 1200×630 px (banner).' : 'Recomendado: 400×600 px (vertical).' }} Máx. {{ uploadLimits.image_max_mb }} MB.</p>
                             </div>
                         </template>
@@ -3290,9 +3399,12 @@ const inputClass = 'block w-full rounded-lg border border-zinc-300 bg-white px-3
                                         <Button type="button" size="sm" variant="ghost" class="mt-1 !py-0.5 !text-xs text-red-600" @click="clearModuleModalFile">Remover</Button>
                                     </div>
                                 </div>
-                                <Button v-else type="button" size="sm" variant="outline" class="w-full !py-2 !text-xs" @click="moduleModalFileInputRef?.click()">
-                                    Escolher imagem
-                                </Button>
+                                <LibraryImagePickActions
+                                    v-else
+                                    full-width
+                                    @upload="moduleModalFileInputRef?.click()"
+                                    @library="openModuleCoverLibrary('modal')"
+                                />
                                 <p class="mt-1 text-xs text-zinc-500 dark:text-zinc-400">{{ moduleModalCoverMode === 'horizontal' ? 'Recomendado: 1200×630 px (banner).' : 'Recomendado: 400×600 px (vertical).' }} Máx. {{ uploadLimits.image_max_mb }} MB.</p>
                             </div>
                         </template>
@@ -3324,9 +3436,12 @@ const inputClass = 'block w-full rounded-lg border border-zinc-300 bg-white px-3
                                         <Button type="button" size="sm" variant="ghost" class="mt-1 !py-0.5 !text-xs text-red-600" @click="clearModuleModalFile">Remover</Button>
                                     </div>
                                 </div>
-                                <Button v-else type="button" size="sm" variant="outline" class="w-full !py-2 !text-xs" @click="moduleModalFileInputRef?.click()">
-                                    Escolher imagem
-                                </Button>
+                                <LibraryImagePickActions
+                                    v-else
+                                    full-width
+                                    @upload="moduleModalFileInputRef?.click()"
+                                    @library="openModuleCoverLibrary('modal')"
+                                />
                                 <p class="mt-1 text-xs text-zinc-500 dark:text-zinc-400">{{ moduleModalCoverMode === 'horizontal' ? 'Recomendado: 1200×630 px (banner).' : 'Recomendado: 400×600 px (vertical).' }} Máx. {{ uploadLimits.image_max_mb }} MB.</p>
                             </div>
                         </template>
@@ -3711,7 +3826,7 @@ const inputClass = 'block w-full rounded-lg border border-zinc-300 bg-white px-3
             </div>
         </Teleport>
 
-        <PdfLibraryModal
+        <MediaLibraryModal
             :open="pdfLibraryOpen"
             :mode="pdfLibraryMode"
             :index-url="pdfLibraryIndexUrl"
@@ -3724,6 +3839,14 @@ const inputClass = 'block w-full rounded-lg border border-zinc-300 bg-white px-3
             :tenant-products="tenant_products"
             @close="pdfLibraryOpen = false"
             @select="onLibraryPdfsSelected"
+        />
+
+        <TenantMediaLibraryPicker
+            :open="moduleCoverLibraryOpen"
+            :max-pick="1"
+            locked-media-type="image"
+            @close="moduleCoverLibraryOpen = false"
+            @select="onModuleCoverLibraryPicked"
         />
     </div>
 </template>

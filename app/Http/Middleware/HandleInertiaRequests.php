@@ -187,6 +187,7 @@ class HandleInertiaRequests extends Middleware
             'dashboard' => 'Dashboard',
             'vendas.index' => 'Vendas',
             'produtos.index' => 'Produtos',
+            'biblioteca.index' => 'Biblioteca de mídia',
             'produtos.create' => 'Novo produto',
             'produtos.edit' => 'Editar produto',
             'cupons.index' => 'Cupons',
